@@ -1,13 +1,164 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import Attendance, { IAttendance } from '../models/attendance';
+import Employee from '../models/Employee'; // Use uppercase E to match other imports
 
 // Helper function to calculate time difference in hours
-const calculateHours = (startTime: string, endTime: string | null): number => {
+const calculateHours = (startTime: string | null, endTime: string | null): number => {
   if (!startTime || !endTime) return 0;
   const start = new Date(startTime).getTime();
   const end = new Date(endTime).getTime();
   return (end - start) / (1000 * 60 * 60);
+};
+
+// Helper function to format date to YYYY-MM-DD
+const formatDate = (date: Date): string => {
+  return date.toISOString().split('T')[0];
+};
+
+// Update attendance status (for supervisors)
+export const updateAttendanceStatus = async (req: Request, res: Response) => {
+  try {
+    const { 
+      employeeId, 
+      attendanceId, 
+      date, 
+      status, 
+      remarks, 
+      supervisorId,
+      employeeName 
+    } = req.body;
+
+    console.log('📝 Updating attendance status:', {
+      employeeId,
+      attendanceId,
+      date,
+      status,
+      remarks,
+      supervisorId,
+      employeeName
+    });
+
+    // Validate required fields
+    if (!employeeId || !date || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: employeeId, date, and status are required'
+      });
+    }
+
+    // Validate status
+    const validStatuses = ['present', 'absent', 'half-day', 'leave', 'weekly-off'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be one of: present, absent, half-day, leave, weekly-off'
+      });
+    }
+
+    // Parse and validate date
+    const attendanceDate = new Date(date);
+    if (isNaN(attendanceDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format'
+      });
+    }
+
+    const formattedDate = formatDate(attendanceDate);
+
+    // Check if attendance record exists
+    let attendanceRecord;
+    
+    if (attendanceId && mongoose.Types.ObjectId.isValid(attendanceId)) {
+      // Update existing record by ID
+      attendanceRecord = await Attendance.findById(attendanceId);
+      
+      if (!attendanceRecord) {
+        return res.status(404).json({
+          success: false,
+          message: 'Attendance record not found'
+        });
+      }
+      
+      // Update the record
+      attendanceRecord.status = status as any;
+      if (remarks !== undefined) attendanceRecord.remarks = remarks;
+      if (supervisorId) attendanceRecord.supervisorId = supervisorId;
+      
+      await attendanceRecord.save();
+      
+    } else {
+      // Check if record exists for this employee and date
+      attendanceRecord = await Attendance.findOne({
+        employeeId,
+        date: formattedDate
+      });
+      
+      if (attendanceRecord) {
+        // Update existing record
+        attendanceRecord.status = status as any;
+        if (remarks !== undefined) attendanceRecord.remarks = remarks;
+        if (supervisorId) attendanceRecord.supervisorId = supervisorId;
+        
+        await attendanceRecord.save();
+      } else {
+        // Try to get employee name if not provided
+        let finalEmployeeName = employeeName;
+        let employeeDepartment = 'General';
+        let employeeSiteName = null;
+        
+        if (!finalEmployeeName) {
+          const employee = await Employee.findById(employeeId);
+          finalEmployeeName = employee?.name || 'Unknown Employee';
+          employeeDepartment = employee?.department || 'General';
+          employeeSiteName = employee?.siteName || null;
+        }
+
+        // Create new attendance record
+        const newAttendance = new Attendance({
+          employeeId,
+          employeeName: finalEmployeeName,
+          date: formattedDate,
+          status,
+          remarks: remarks || '',
+          supervisorId: supervisorId || null,
+          isCheckedIn: false,
+          isOnBreak: false,
+          checkInTime: null,
+          checkOutTime: null,
+          breakStartTime: null,
+          breakEndTime: null,
+          totalHours: 0,
+          breakTime: 0,
+          department: employeeDepartment,
+          siteName: employeeSiteName
+        });
+        
+        attendanceRecord = await newAttendance.save();
+      }
+    }
+
+    console.log('✅ Attendance status updated successfully:', {
+      id: attendanceRecord._id,
+      employeeId: attendanceRecord.employeeId,
+      status: attendanceRecord.status,
+      date: attendanceRecord.date
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Attendance status updated to ${status} successfully`,
+      data: attendanceRecord
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error updating attendance status:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error while updating attendance status'
+    });
+  }
 };
 
 // Check in
@@ -22,7 +173,7 @@ export const checkIn = async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
 
     // Check if already checked in today
     const existingAttendance = await Attendance.findOne({
@@ -61,6 +212,9 @@ export const checkIn = async (req: Request, res: Response) => {
         });
       }
     } else {
+      // Get employee details for department/site
+      const employee = await Employee.findById(employeeId);
+      
       // Create new attendance record
       attendance = await Attendance.create({
         employeeId,
@@ -76,6 +230,8 @@ export const checkIn = async (req: Request, res: Response) => {
         isCheckedIn: true,
         isOnBreak: false,
         supervisorId: supervisorId || null,
+        department: employee?.department || 'General',
+        siteName: employee?.siteName || null
       });
     }
 
@@ -106,7 +262,7 @@ export const checkOut = async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
     const checkOutTime = new Date().toISOString();
 
     const attendance = await Attendance.findOne({
@@ -173,7 +329,7 @@ export const breakIn = async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
     const breakStartTime = new Date().toISOString();
 
     const attendance = await Attendance.findOne({
@@ -235,7 +391,7 @@ export const breakOut = async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
     const breakEndTime = new Date().toISOString();
 
     const attendance = await Attendance.findOne({
@@ -245,7 +401,7 @@ export const breakOut = async (req: Request, res: Response) => {
       isOnBreak: true,
     });
 
-    if (!attendance) {
+    if (!attendance || !attendance.breakStartTime) {
       return res.status(404).json({
         success: false,
         message: 'No active break found',
@@ -253,7 +409,7 @@ export const breakOut = async (req: Request, res: Response) => {
     }
 
     // Calculate break duration
-    const breakDuration = calculateHours(attendance.breakStartTime!, breakEndTime);
+    const breakDuration = calculateHours(attendance.breakStartTime, breakEndTime);
     const totalBreakTime = (attendance.breakTime || 0) + breakDuration;
 
     // Update attendance
@@ -303,7 +459,7 @@ export const getTodayStatus = async (req: Request, res: Response) => {
       });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatDate(new Date());
 
     const attendance = await Attendance.findOne({
       employeeId,
@@ -323,6 +479,7 @@ export const getTodayStatus = async (req: Request, res: Response) => {
           breakEndTime: null,
           totalHours: 0,
           breakTime: 0,
+          lastCheckInDate: null
         },
       });
     }
@@ -330,7 +487,17 @@ export const getTodayStatus = async (req: Request, res: Response) => {
     res.status(200).json({
       success: true,
       message: 'Attendance status retrieved',
-      data: attendance,
+      data: {
+        isCheckedIn: attendance.isCheckedIn,
+        isOnBreak: attendance.isOnBreak,
+        checkInTime: attendance.checkInTime,
+        checkOutTime: attendance.checkOutTime,
+        breakStartTime: attendance.breakStartTime,
+        breakEndTime: attendance.breakEndTime,
+        totalHours: attendance.totalHours,
+        breakTime: attendance.breakTime,
+        lastCheckInDate: attendance.date
+      },
     });
   } catch (error: any) {
     console.error('❌ Get status error:', error.message);
@@ -369,7 +536,7 @@ export const getAttendanceHistory = async (req: Request, res: Response) => {
 
     const [attendanceHistory, total] = await Promise.all([
       Attendance.find(query)
-        .sort({ date: -1 })
+        .sort({ date: -1, createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
       Attendance.countDocuments(query)
@@ -408,7 +575,7 @@ export const getTeamAttendance = async (req: Request, res: Response) => {
       });
     }
 
-    const queryDate = date ? date.toString() : new Date().toISOString().split('T')[0];
+    const queryDate = date ? date.toString() : formatDate(new Date());
     
     const teamAttendance = await Attendance.find({
       date: queryDate,
@@ -435,7 +602,7 @@ export const getTeamAttendance = async (req: Request, res: Response) => {
 // Get all attendance
 export const getAllAttendance = async (req: Request, res: Response) => {
   try {
-    const { page = 1, limit = 20, date, employeeId } = req.query;
+    const { page = 1, limit = 20, date, employeeId, startDate, endDate } = req.query;
     
     const query: any = {};
     
@@ -447,13 +614,20 @@ export const getAllAttendance = async (req: Request, res: Response) => {
       query.employeeId = employeeId.toString();
     }
 
+    if (startDate && endDate) {
+      query.date = {
+        $gte: startDate.toString(),
+        $lte: endDate.toString(),
+      };
+    }
+
     const pageNum = parseInt(page.toString());
     const limitNum = parseInt(limit.toString());
     const skip = (pageNum - 1) * limitNum;
 
     const [attendanceRecords, total] = await Promise.all([
       Attendance.find(query)
-        .sort({ createdAt: -1 })
+        .sort({ date: -1, createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
       Attendance.countDocuments(query)
@@ -543,7 +717,8 @@ export const manualAttendance = async (req: Request, res: Response) => {
       status,
       remarks,
       totalHours = 0,
-      isCheckedIn = false
+      isCheckedIn = false,
+      supervisorId
     } = req.body;
 
     if (!employeeId || !employeeName || !date) {
@@ -553,10 +728,24 @@ export const manualAttendance = async (req: Request, res: Response) => {
       });
     }
 
+    // Validate date
+    const attendanceDate = new Date(date);
+    if (isNaN(attendanceDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format',
+      });
+    }
+
+    const formattedDate = formatDate(attendanceDate);
+
+    // Get employee details
+    const employee = await Employee.findById(employeeId);
+
     // Check if record already exists
     const existingRecord = await Attendance.findOne({
       employeeId,
-      date,
+      date: formattedDate,
     });
 
     let attendance;
@@ -566,6 +755,7 @@ export const manualAttendance = async (req: Request, res: Response) => {
       attendance = await Attendance.findByIdAndUpdate(
         existingRecord._id,
         {
+          employeeName,
           checkInTime,
           checkOutTime,
           breakStartTime,
@@ -575,6 +765,9 @@ export const manualAttendance = async (req: Request, res: Response) => {
           totalHours,
           isCheckedIn: isCheckedIn && !checkOutTime,
           isOnBreak: !!breakStartTime && !breakEndTime,
+          supervisorId: supervisorId || existingRecord.supervisorId,
+          department: employee?.department || existingRecord.department,
+          siteName: employee?.siteName || existingRecord.siteName,
           updatedAt: new Date(),
         },
         { new: true }
@@ -584,16 +777,19 @@ export const manualAttendance = async (req: Request, res: Response) => {
       attendance = await Attendance.create({
         employeeId,
         employeeName,
-        date,
+        date: formattedDate,
         checkInTime,
         checkOutTime,
         breakStartTime,
         breakEndTime,
-        status,
-        remarks,
+        status: status || 'present',
+        remarks: remarks || '',
         totalHours,
         isCheckedIn: isCheckedIn && !checkOutTime,
         isOnBreak: !!breakStartTime && !breakEndTime,
+        supervisorId: supervisorId || null,
+        department: employee?.department || 'General',
+        siteName: employee?.siteName || null
       });
     }
 
@@ -603,7 +799,7 @@ export const manualAttendance = async (req: Request, res: Response) => {
       data: attendance,
     });
   } catch (error: any) {
-    console.error('Manual attendance error:', error.message);
+    console.error('❌ Manual attendance error:', error.message);
     res.status(500).json({
       success: false,
       message: 'Error recording attendance',
@@ -647,7 +843,7 @@ export const getWeeklySummary = async (req: Request, res: Response) => {
           daysAbsent: 0,
           daysHalfDay: 0,
           daysLeave: 0,
-          weeklyOffDays: 0,
+          daysWeeklyOff: 0,
           totalHours: 0,
           totalBreakTime: 0,
         });
@@ -670,22 +866,27 @@ export const getWeeklySummary = async (req: Request, res: Response) => {
         case 'leave':
           employeeData.daysLeave++;
           break;
+        case 'weekly-off':
+          employeeData.daysWeeklyOff++;
+          break;
       }
       
       employeeData.totalBreakTime += record.breakTime || 0;
-      
-      // Determine overall status for the week
-      if (employeeData.daysPresent >= 5) {
-        employeeData.overallStatus = 'present';
-      } else if (employeeData.daysAbsent >= 5) {
-        employeeData.overallStatus = 'absent';
-      } else {
-        employeeData.overallStatus = 'mixed';
-      }
     });
 
-    // Convert map to array
-    const weeklySummaries = Array.from(employeeMap.values());
+    // Convert map to array and determine overall status
+    const weeklySummaries = Array.from(employeeMap.values()).map(emp => {
+      let overallStatus: 'present' | 'absent' | 'mixed' = 'absent';
+      
+      if (emp.daysPresent > 0 || emp.daysHalfDay > 0) {
+        overallStatus = emp.daysPresent >= 5 ? 'present' : 'mixed';
+      }
+      
+      return {
+        ...emp,
+        overallStatus
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -693,7 +894,7 @@ export const getWeeklySummary = async (req: Request, res: Response) => {
       data: weeklySummaries,
     });
   } catch (error: any) {
-    console.error('Weekly summary error:', error.message);
+    console.error('❌ Weekly summary error:', error.message);
     res.status(500).json({
       success: false,
       message: 'Error retrieving weekly summary',

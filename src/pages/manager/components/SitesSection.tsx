@@ -1,683 +1,800 @@
+"use client";
+
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DashboardHeader } from "@/components/shared/DashboardHeader";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
-  Plus, 
-  Eye, 
-  Trash2, 
-  Edit, 
-  Building, 
-  User, 
-  Phone, 
+  Building2, 
   MapPin, 
-  Users,
-  Shield,
+  Users, 
+  Calendar,
+  Clock,
+  AlertCircle,
+  CheckCircle,
+  Loader2,
+  Briefcase,
+  User,
+  Eye,
+  Paperclip,
   FileText,
-  Calendar
+  DollarSign,
+  Square,
+  ChevronRight,
+  Layers
 } from "lucide-react";
 import { toast } from "sonner";
-import { initialSites, Site } from "../data";
-import { FormField } from "./shared";
+import { motion } from "framer-motion";
+import { useRole } from "@/context/RoleContext";
+import taskService, { Task, ExtendedSite, Attachment } from "@/services/TaskService";
+import { siteService } from "@/services/SiteService";
+import { format } from "date-fns";
 
-// Mock current logged-in manager
-const currentManager = {
-  id: "manager-a",
-  name: "Manager A",
-  role: "manager",
-  assignedSiteIds: ["1", "2", "3"] // Sites assigned to this manager
-};
-
-const ServicesList = [
-  "Housekeeping",
-  "Security",
-  "Parking",
-  "Waste Management",
-  "STP Tank Cleaning",
-  "Maintenance"
-];
-
-const StaffRoles = [
-  "Manager",
-  "Supervisor",
-  "Housekeeping Staff",
-  "Security Guard",
-  "Parking Attendant",
-  "Waste Collector",
-  "STP Operator",
-  "Maintenance Staff"
-];
-
-const SitesSection = () => {
-  const [sites, setSites] = useState<Site[]>(initialSites);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editMode, setEditMode] = useState(false);
-  const [selectedServices, setSelectedServices] = useState<string[]>([]);
-  const [staffDeployment, setStaffDeployment] = useState<
-    Array<{ role: string; count: number }>
-  >([]);
-  const [editingSiteId, setEditingSiteId] = useState<string | null>(null);
-
-  // Filter sites to show only those assigned to current manager
-  const assignedSites = sites.filter(site => 
-    currentManager.assignedSiteIds.includes(site.id)
-  );
-
-  const toggleService = (service: string) => {
-    setSelectedServices(prev =>
-      prev.includes(service)
-        ? prev.filter(s => s !== service)
-        : [...prev, service]
-    );
+// Extended types for manager view
+interface ManagerSite extends ExtendedSite {
+  tasks: Task[];
+  taskStats: {
+    total: number;
+    pending: number;
+    inProgress: number;
+    completed: number;
+    cancelled: number;
   };
-
-  const updateStaffCount = (role: string, count: number) => {
-    setStaffDeployment(prev => {
-      const existing = prev.find(item => item.role === role);
-      if (existing) {
-        return prev.map(item =>
-          item.role === role ? { ...item, count: Math.max(0, count) } : item
-        );
-      }
-      return [...prev, { role, count }];
-    });
+  staffStats: {
+    total: number;
+    managers: number;
+    supervisors: number;
+    employees: number;
   };
+}
 
-  const resetForm = () => {
-    setSelectedServices([]);
-    setStaffDeployment([]);
-    setEditMode(false);
-    setEditingSiteId(null);
-  };
+interface ManagerTask extends Task {
+  siteDetails?: ExtendedSite;
+}
 
-  const handleEditSite = (site: Site) => {
-    // Check if site is assigned to current manager
-    if (!currentManager.assignedSiteIds.includes(site.id)) {
-      toast.error("You can only edit sites assigned to you");
-      return;
-    }
+const ManagerSitesPage = () => {
+  const { user: authUser, isAuthenticated } = useRole();
+  const [loading, setLoading] = useState(true);
+  const [sites, setSites] = useState<ManagerSite[]>([]);
+  const [selectedSite, setSelectedSite] = useState<ManagerSite | null>(null);
+  const [selectedTask, setSelectedTask] = useState<ManagerTask | null>(null);
+  const [showTaskDetails, setShowTaskDetails] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
 
-    setEditMode(true);
-    setEditingSiteId(site.id);
-    setSelectedServices(site.services || []);
-    setStaffDeployment(site.staffDeployment || []);
-    
-    // Set form values for editing
-    setTimeout(() => {
-      const form = document.getElementById('site-form') as HTMLFormElement;
-      if (form) {
-        (form.elements.namedItem('site-name') as HTMLInputElement).value = site.name;
-        (form.elements.namedItem('client-name') as HTMLInputElement).value = site.clientName;
-        (form.elements.namedItem('location') as HTMLInputElement).value = site.location;
-        (form.elements.namedItem('area-sqft') as HTMLInputElement).value = site.areaSqft.toString();
-        (form.elements.namedItem('site-manager') as HTMLInputElement).value = site.siteManager;
-        (form.elements.namedItem('manager-phone') as HTMLInputElement).value = site.managerPhone;
-        (form.elements.namedItem('supervisor') as HTMLInputElement).value = site.supervisor;
-        (form.elements.namedItem('supervisor-phone') as HTMLInputElement).value = site.supervisorPhone;
-        (form.elements.namedItem('contract-value') as HTMLInputElement).value = site.contractValue.toString();
-        (form.elements.namedItem('contract-end-date') as HTMLInputElement).value = site.contractEndDate;
-      }
-    }, 0);
-    
-    setDialogOpen(true);
-  };
-
-  const handleAddOrUpdateSite = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-
-    const siteData = {
-      name: formData.get("site-name") as string,
-      clientName: formData.get("client-name") as string,
-      location: formData.get("location") as string,
-      areaSqft: Number(formData.get("area-sqft")),
-      siteManager: formData.get("site-manager") as string,
-      managerPhone: formData.get("manager-phone") as string,
-      supervisor: formData.get("supervisor") as string,
-      supervisorPhone: formData.get("supervisor-phone") as string,
-      contractValue: Number(formData.get("contract-value")),
-      contractEndDate: formData.get("contract-end-date") as string,
-      services: selectedServices,
-      staffDeployment: staffDeployment.filter(item => item.count > 0),
-      status: "active" as const
-    };
-
-    if (editMode && editingSiteId) {
-      // Check if site is assigned to current manager
-      if (!currentManager.assignedSiteIds.includes(editingSiteId)) {
-        toast.error("You can only update sites assigned to you");
-        return;
-      }
-
-      // Update existing site
-      setSites(prev =>
-        prev.map(site =>
-          site.id === editingSiteId
-            ? { ...site, ...siteData }
-            : site
-        )
-      );
-      toast.success("Site updated successfully!");
+  useEffect(() => {
+    if (authUser && isAuthenticated) {
+      fetchManagerData();
     } else {
-      // Add new site (auto-assign to current manager)
-      const newSite: Site = {
-        ...siteData,
-        id: Date.now().toString()
-      };
-      setSites(prev => [newSite, ...prev]);
+      setLoading(false);
+    }
+  }, [authUser, isAuthenticated]);
+
+  const fetchManagerData = async () => {
+    try {
+      setLoading(true);
       
-      // Add to manager's assigned sites
-      currentManager.assignedSiteIds.push(newSite.id);
-      
-      toast.success("Site added successfully!");
-    }
+      // Get current manager ID
+      const managerId = authUser?._id || authUser?.id;
+      if (!managerId) {
+        throw new Error("Manager ID not found");
+      }
 
-    setDialogOpen(false);
-    resetForm();
-    (e.target as HTMLFormElement).reset();
+      // Fetch all sites and tasks
+      const [allSites, allTasks] = await Promise.all([
+        siteService.getAllSites(),
+        taskService.getAllTasks()
+      ]);
+
+      // Filter sites where this manager is assigned
+      const managerSites = allSites.filter(site => {
+        // Check if manager is assigned to this site through tasks
+        const siteTasks = allTasks.filter(task => task.siteId === site._id);
+        
+        // Check if manager is assigned to any task at this site
+        const isManagerAssigned = siteTasks.some(task => 
+          task.assignedUsers?.some(user => 
+            user.userId === managerId && user.role === 'manager'
+          )
+        );
+
+        // Also check old format
+        const isManagerAssignedOld = siteTasks.some(task => 
+          task.assignedTo === managerId
+        );
+
+        return isManagerAssigned || isManagerAssignedOld;
+      });
+
+      // Transform sites with their tasks and stats
+      const transformedSites: ManagerSite[] = managerSites.map(site => {
+        const siteTasks = allTasks.filter(task => task.siteId === site._id);
+        
+        // Calculate task statistics
+        const taskStats = {
+          total: siteTasks.length,
+          pending: siteTasks.filter(t => t.status === 'pending').length,
+          inProgress: siteTasks.filter(t => t.status === 'in-progress').length,
+          completed: siteTasks.filter(t => t.status === 'completed').length,
+          cancelled: siteTasks.filter(t => t.status === 'cancelled').length
+        };
+
+        // Calculate staff statistics from site deployment
+        const staffStats = {
+          total: site.staffDeployment?.reduce((sum, item) => sum + (item.count || 0), 0) || 0,
+          managers: site.staffDeployment?.find(d => d.role === 'Manager')?.count || 0,
+          supervisors: site.staffDeployment?.find(d => d.role === 'Supervisor')?.count || 0,
+          employees: site.staffDeployment?.filter(d => 
+            !['Manager', 'Supervisor'].includes(d.role)
+          ).reduce((sum, item) => sum + (item.count || 0), 0) || 0
+        };
+
+        return {
+          ...site,
+          tasks: siteTasks,
+          taskStats,
+          staffStats,
+          managerCount: staffStats.managers,
+          supervisorCount: staffStats.supervisors
+        };
+      });
+
+      setSites(transformedSites);
+
+      // Auto-select first site if available
+      if (transformedSites.length > 0) {
+        setSelectedSite(transformedSites[0]);
+      }
+
+    } catch (error: any) {
+      console.error("Error fetching manager data:", error);
+      toast.error(error.message || "Failed to load your sites");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleDeleteSite = (siteId: string) => {
-    // Check if site is assigned to current manager
-    if (!currentManager.assignedSiteIds.includes(siteId)) {
-      toast.error("You can only delete sites assigned to you");
-      return;
-    }
-
-    setSites(prev => prev.filter(site => site.id !== siteId));
-    // Remove from manager's assigned sites
-    const index = currentManager.assignedSiteIds.indexOf(siteId);
-    if (index > -1) {
-      currentManager.assignedSiteIds.splice(index, 1);
-    }
-    toast.success("Site deleted successfully!");
+  const handleViewTask = (task: Task) => {
+    const siteDetails = sites.find(s => s._id === task.siteId);
+    setSelectedTask({ ...task, siteDetails });
+    setShowTaskDetails(true);
   };
 
-  const handleToggleStatus = (siteId: string) => {
-    // Check if site is assigned to current manager
-    if (!currentManager.assignedSiteIds.includes(siteId)) {
-      toast.error("You can only update status of sites assigned to you");
-      return;
+  const handleUpdateTaskStatus = async (taskId: string, status: Task['status']) => {
+    try {
+      await taskService.updateTaskStatus(taskId, { status });
+      toast.success("Task status updated!");
+      await fetchManagerData(); // Refresh data
+    } catch (error: any) {
+      console.error("Error updating task:", error);
+      toast.error(error.message || "Failed to update task");
     }
-
-    setSites(prev =>
-      prev.map(site =>
-        site.id === siteId
-          ? { ...site, status: site.status === "active" ? "inactive" : "active" }
-          : site
-      )
-    );
-    toast.success("Site status updated!");
-  };
-
-  const getTotalStaff = (site: Site) => {
-    return site.staffDeployment?.reduce((total, item) => total + item.count, 0) || 0;
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0
-    }).format(amount);
   };
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const handleDialogClose = (open: boolean) => {
-    if (!open) {
-      resetForm();
+    if (!dateString) return 'N/A';
+    try {
+      return format(new Date(dateString), 'MMM dd, yyyy hh:mm a');
+    } catch {
+      return dateString;
     }
-    setDialogOpen(open);
   };
 
-  // Calculate statistics for dashboard
-  const totalStaffCount = assignedSites.reduce((total, site) => 
-    total + (getTotalStaff(site)), 0
-  );
-  
-  const totalContractValue = assignedSites.reduce((total, site) => 
-    total + site.contractValue, 0
-  );
-  
-  const totalArea = assignedSites.reduce((total, site) => 
-    total + site.areaSqft, 0
-  );
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case 'high': return 'destructive';
+      case 'medium': return 'default';
+      case 'low': return 'secondary';
+      default: return 'outline';
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed': return 'default';
+      case 'in-progress': return 'default';
+      case 'pending': return 'secondary';
+      case 'cancelled': return 'destructive';
+      default: return 'outline';
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'completed': return <CheckCircle className="h-3 w-3" />;
+      case 'in-progress': return <Clock className="h-3 w-3" />;
+      case 'pending': return <AlertCircle className="h-3 w-3" />;
+      default: return null;
+    }
+  };
+
+  if (!isAuthenticated && !loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardHeader title="My Sites" subtitle="Manage your assigned sites and tasks" />
+        <div className="p-6 max-w-4xl mx-auto">
+          <Card>
+            <CardContent className="p-8 text-center">
+              <AlertCircle className="h-16 w-16 mx-auto text-yellow-500 mb-4" />
+              <h2 className="text-xl font-bold mb-2">Authentication Required</h2>
+              <p className="text-muted-foreground mb-4">
+                Please log in to view your assigned sites.
+              </p>
+              <Button onClick={() => window.location.href = '/login'}>
+                Go to Login
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardHeader title="My Sites" subtitle="Loading your assigned sites..." />
+        <div className="p-6 max-w-4xl mx-auto">
+          <div className="flex items-center justify-center h-64">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="ml-3 text-muted-foreground">Loading your sites...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (sites.length === 0) {
+    return (
+      <div className="min-h-screen bg-background">
+        <DashboardHeader title="My Sites" subtitle="Manage your assigned sites and tasks" />
+        <div className="p-6 max-w-4xl mx-auto">
+          <Card>
+            <CardContent className="p-12 text-center">
+              <Building2 className="h-16 w-16 mx-auto text-muted-foreground mb-4" />
+              <h2 className="text-2xl font-bold mb-2">No Sites Assigned</h2>
+              <p className="text-muted-foreground mb-6">
+                You haven't been assigned to any sites yet. Please contact your administrator.
+              </p>
+              <Button onClick={fetchManagerData} variant="outline">
+                Refresh
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Manager Header */}
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div>
-              <CardTitle>Site Management</CardTitle>
-              <div className="flex items-center gap-2 mt-2">
-                <Shield className="h-4 w-4 text-blue-600" />
-                <p className="text-sm text-muted-foreground">
-                  Logged in as <span className="font-medium text-blue-600">{currentManager.name}</span>
-                </p>
-                <Badge variant="outline" className="ml-2">
-                  Manager
-                </Badge>
+    <div className="min-h-screen bg-background">
+      <DashboardHeader 
+        title="My Sites" 
+        subtitle={`You are managing ${sites.length} site${sites.length > 1 ? 's' : ''}`} 
+      />
+
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+        {/* Site Overview Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Sites</p>
+                  <p className="text-2xl font-bold">{sites.length}</p>
+                </div>
+                <Building2 className="h-8 w-8 text-blue-500" />
               </div>
-            </div>
-            <Dialog open={dialogOpen} onOpenChange={handleDialogClose}>
-              <DialogTrigger asChild>
-                <Button onClick={() => resetForm()}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add New Site
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>{editMode ? "Edit Site" : "Add New Site"}</DialogTitle>
-                  <p className="text-sm text-muted-foreground">
-                    {editMode ? "Update site details" : "Add a new site to your management"}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Tasks</p>
+                  <p className="text-2xl font-bold">
+                    {sites.reduce((sum, site) => sum + site.taskStats.total, 0)}
                   </p>
-                </DialogHeader>
+                </div>
+                <Briefcase className="h-8 w-8 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
 
-                <form id="site-form" onSubmit={handleAddOrUpdateSite} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <FormField label="Site Name" id="site-name" required>
-                      <Input id="site-name" name="site-name" placeholder="Enter site name" required />
-                    </FormField>
-                    <FormField label="Client Name" id="client-name" required>
-                      <Input id="client-name" name="client-name" placeholder="Enter client name" required />
-                    </FormField>
-                    <FormField label="Location" id="location" required>
-                      <Input id="location" name="location" placeholder="Enter location" required />
-                    </FormField>
-                    <FormField label="Area (sqft)" id="area-sqft" required>
-                      <Input 
-                        id="area-sqft" 
-                        name="area-sqft" 
-                        type="number" 
-                        placeholder="Enter area in sqft" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Site Manager" id="site-manager" required>
-                      <Input 
-                        id="site-manager" 
-                        name="site-manager" 
-                        placeholder="Enter site manager name" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Manager Phone" id="manager-phone" required>
-                      <Input 
-                        id="manager-phone" 
-                        name="manager-phone" 
-                        placeholder="Enter manager phone" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Supervisor" id="supervisor" required>
-                      <Input 
-                        id="supervisor" 
-                        name="supervisor" 
-                        placeholder="Enter supervisor name" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Supervisor Phone" id="supervisor-phone" required>
-                      <Input 
-                        id="supervisor-phone" 
-                        name="supervisor-phone" 
-                        placeholder="Enter supervisor phone" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Contract Value (₹)" id="contract-value" required>
-                      <Input 
-                        id="contract-value" 
-                        name="contract-value" 
-                        type="number" 
-                        placeholder="Enter contract value" 
-                        required 
-                      />
-                    </FormField>
-                    <FormField label="Contract End Date" id="contract-end-date" required>
-                      <Input 
-                        id="contract-end-date" 
-                        name="contract-end-date" 
-                        type="date" 
-                        required 
-                      />
-                    </FormField>
-                  </div>
-
-                  <div className="border p-4 rounded-md">
-                    <div className="flex items-center gap-2 mb-3">
-                      <FileText className="h-4 w-4 text-blue-600" />
-                      <p className="font-medium">Services for this Site</p>
-                    </div>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                      {ServicesList.map((service) => (
-                        <div key={service} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`service-${service}`}
-                            checked={selectedServices.includes(service)}
-                            onCheckedChange={() => toggleService(service)}
-                          />
-                          <label htmlFor={`service-${service}`} className="cursor-pointer text-sm">
-                            {service}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="border p-4 rounded-md">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Users className="h-4 w-4 text-green-600" />
-                      <p className="font-medium">Staff Deployment</p>
-                    </div>
-                    <div className="space-y-3">
-                      {StaffRoles.map((role) => {
-                        const deployment = staffDeployment.find(item => item.role === role);
-                        const count = deployment?.count || 0;
-                        return (
-                          <div key={role} className="flex items-center justify-between">
-                            <span className="text-sm">{role}</span>
-                            <div className="flex items-center space-x-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => updateStaffCount(role, count - 1)}
-                                disabled={count <= 0}
-                              >
-                                -
-                              </Button>
-                              <Input
-                                type="number"
-                                value={count}
-                                onChange={(e) => updateStaffCount(role, parseInt(e.target.value) || 0)}
-                                className="w-20 text-center"
-                                min="0"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => updateStaffCount(role, count + 1)}
-                              >
-                                +
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="bg-primary/5 p-4 rounded-lg">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Shield className="h-4 w-4 text-primary" />
-                      <span className="font-medium">Manager Information</span>
-                    </div>
-                    <div className="text-sm space-y-1">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Manager:</span>
-                        <span className="font-medium">{currentManager.name}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Current Assigned Sites:</span>
-                        <span className="font-medium">{assignedSites.length} sites</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Button type="submit" className="w-full">
-                    {editMode ? "Update Site" : "Add Site"}
-                  </Button>
-                </form>
-              </DialogContent>
-            </Dialog>
-          </div>
-        </CardHeader>
-
-        <CardContent>
-          <div className="space-y-6">
-            {/* Dashboard Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <Card className="bg-blue-50 border-blue-200">
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-blue-700">Assigned Sites</p>
-                      <p className="text-2xl font-bold text-blue-900">{assignedSites.length}</p>
-                    </div>
-                    <Building className="h-8 w-8 text-blue-600" />
-                  </div>
-                  <div className="mt-2 text-xs text-blue-600">
-                    Total sites under your management
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-green-50 border-green-200">
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-green-700">Total Staff</p>
-                      <p className="text-2xl font-bold text-green-900">{totalStaffCount}</p>
-                    </div>
-                    <Users className="h-8 w-8 text-green-600" />
-                  </div>
-                  <div className="mt-2 text-xs text-green-600">
-                    Staff across all your sites
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-purple-50 border-purple-200">
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-purple-700">Total Contract Value</p>
-                      <p className="text-2xl font-bold text-purple-900">
-                        {formatCurrency(totalContractValue)}
-                      </p>
-                    </div>
-                    <FileText className="h-8 w-8 text-purple-600" />
-                  </div>
-                  <div className="mt-2 text-xs text-purple-600">
-                    Combined contract value
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-amber-50 border-amber-200">
-                <CardContent className="pt-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-amber-700">Total Area</p>
-                      <p className="text-2xl font-bold text-amber-900">
-                        {(totalArea / 1000).toFixed(1)}K sqft
-                      </p>
-                    </div>
-                    <MapPin className="h-8 w-8 text-amber-600" />
-                  </div>
-                  <div className="mt-2 text-xs text-amber-600">
-                    Combined area of all sites
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Sites Table */}
-            {assignedSites.length === 0 ? (
-              <Card className="border-dashed">
-                <CardContent className="pt-6 text-center">
-                  <Building className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No Sites Assigned</h3>
-                  <p className="text-muted-foreground mb-4">
-                    You haven't been assigned any sites yet. Add your first site to get started.
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Pending Tasks</p>
+                  <p className="text-2xl font-bold">
+                    {sites.reduce((sum, site) => sum + site.taskStats.pending, 0)}
                   </p>
-                  <Dialog open={dialogOpen} onOpenChange={handleDialogClose}>
-                    <DialogTrigger asChild>
-                      <Button onClick={() => resetForm()}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add Your First Site
-                      </Button>
-                    </DialogTrigger>
-                  </Dialog>
-                </CardContent>
-              </Card>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Site Details</TableHead>
-                    <TableHead>Client Information</TableHead>
-                    <TableHead>Location & Area</TableHead>
-                    <TableHead>Services</TableHead>
-                    <TableHead>Staff</TableHead>
-                    <TableHead>Contract</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {assignedSites.map((site) => (
-                    <TableRow key={site.id}>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Building className="h-4 w-4 text-blue-600" />
-                            <span className="font-medium">{site.name}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <User className="h-3 w-3" />
-                            Manager: {site.siteManager}
-                          </div>
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <Phone className="h-3 w-3" />
-                            {site.managerPhone}
-                          </div>
+                </div>
+                <Clock className="h-8 w-8 text-yellow-500" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Completed Tasks</p>
+                  <p className="text-2xl font-bold">
+                    {sites.reduce((sum, site) => sum + site.taskStats.completed, 0)}
+                  </p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Main Content - Site List and Details */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Site List with Scrolling */}
+          <Card className="lg:col-span-1">
+            <CardHeader>
+              <CardTitle>Your Sites</CardTitle>
+              <CardDescription>Select a site to view details</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="max-h-[600px] overflow-y-auto px-4 pb-4 space-y-3">
+                {sites.map((site) => (
+                  <motion.div
+                    key={site._id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <Card
+                      className={`cursor-pointer transition-all hover:shadow-md mt-3 ${
+                        selectedSite?._id === site._id ? 'ring-2 ring-primary' : ''
+                      }`}
+                      onClick={() => setSelectedSite(site)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="font-semibold">{site.name}</div>
+                          <Badge variant={site.status === 'active' ? 'default' : 'secondary'}>
+                            {site.status}
+                          </Badge>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="font-medium">{site.clientName}</div>
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <User className="h-3 w-3" />
-                            Sup: {site.supervisor}
-                          </div>
-                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                            <Phone className="h-3 w-3" />
-                            {site.supervisorPhone}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1">
+                        
+                        <div className="space-y-2 text-sm">
+                          <div className="flex items-center gap-2 text-muted-foreground">
                             <MapPin className="h-3 w-3" />
-                            <span>{site.location}</span>
+                            {site.location}
                           </div>
-                          <div className="text-sm text-muted-foreground">
-                            {site.areaSqft.toLocaleString()} sqft
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Building2 className="h-3 w-3" />
+                            {site.clientName}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Briefcase className="h-3 w-3" />
+                            <span className="font-medium">{site.taskStats.total} tasks</span>
+                            <span className="text-xs text-muted-foreground">
+                              ({site.taskStats.pending} pending, {site.taskStats.completed} completed)
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Users className="h-3 w-3" />
+                            <span className="font-medium">{site.staffStats.total} staff</span>
+                            <span className="text-xs text-muted-foreground">
+                              ({site.staffStats.managers} mgr, {site.staffStats.supervisors} sup)
+                            </span>
                           </div>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {site.services?.slice(0, 3).map((srv, i) => (
-                            <Badge key={i} variant="outline" className="text-xs">
-                              {srv}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Site Details */}
+          <Card className="lg:col-span-2">
+            {selectedSite ? (
+              <>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>{selectedSite.name}</CardTitle>
+                      <CardDescription>{selectedSite.location}</CardDescription>
+                    </div>
+                    <Badge variant={selectedSite.status === 'active' ? 'default' : 'secondary'} className="text-sm">
+                      {selectedSite.status}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+                    <TabsList className="grid w-full grid-cols-3">
+                      <TabsTrigger value="overview">Overview</TabsTrigger>
+                      <TabsTrigger value="tasks">Tasks</TabsTrigger>
+                      <TabsTrigger value="staff">Staff</TabsTrigger>
+                    </TabsList>
+
+                    {/* Overview Tab */}
+                    <TabsContent value="overview" className="space-y-4">
+                      {/* Site Stats */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <Card>
+                          <CardContent className="p-4">
+                            <div className="text-sm text-muted-foreground">Area</div>
+                            <div className="text-xl font-bold flex items-center gap-2">
+                              <Square className="h-4 w-4" />
+                              {selectedSite.areaSqft?.toLocaleString()} sqft
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardContent className="p-4">
+                            <div className="text-sm text-muted-foreground">Contract Value</div>
+                            <div className="text-xl font-bold flex items-center gap-2">
+                              <DollarSign className="h-4 w-4" />
+                              {selectedSite.contractValue?.toLocaleString('en-IN', {
+                                style: 'currency',
+                                currency: 'INR',
+                                maximumFractionDigits: 0
+                              })}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+
+                      {/* Services */}
+                      <div>
+                        <h3 className="font-semibold mb-2">Services</h3>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedSite.services?.map((service, index) => (
+                            <Badge key={index} variant="secondary">
+                              {service}
                             </Badge>
                           ))}
-                          {site.services && site.services.length > 3 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{site.services.length - 3} more
-                            </Badge>
+                          {(!selectedSite.services || selectedSite.services.length === 0) && (
+                            <p className="text-sm text-muted-foreground">No services assigned</p>
                           )}
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <Badge variant="outline" className="text-xs">
-                            Total: {getTotalStaff(site)}
-                          </Badge>
-                          <div className="text-xs text-muted-foreground space-y-0.5">
-                            {site.staffDeployment?.slice(0, 2).map((deploy, i) => (
-                              <div key={i}>
-                                {deploy.role.split(' ')[0]}: {deploy.count}
+                      </div>
+
+                      {/* Quick Stats */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <Card>
+                          <CardContent className="p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Briefcase className="h-4 w-4" />
+                              <div className="font-medium">Tasks</div>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-sm">
+                                <span>Total:</span>
+                                <span className="font-bold">{selectedSite.taskStats.total}</span>
                               </div>
-                            ))}
-                            {site.staffDeployment && site.staffDeployment.length > 2 && (
-                              <div>+{site.staffDeployment.length - 2} roles</div>
-                            )}
-                          </div>
+                              <div className="flex justify-between text-sm">
+                                <span>Pending:</span>
+                                <span className="text-yellow-600">{selectedSite.taskStats.pending}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span>In Progress:</span>
+                                <span className="text-blue-600">{selectedSite.taskStats.inProgress}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span>Completed:</span>
+                                <span className="text-green-600">{selectedSite.taskStats.completed}</span>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardContent className="p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Users className="h-4 w-4" />
+                              <div className="font-medium">Staff</div>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-sm">
+                                <span>Total:</span>
+                                <span className="font-bold">{selectedSite.staffStats.total}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span>Managers:</span>
+                                <span>{selectedSite.staffStats.managers}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span>Supervisors:</span>
+                                <span>{selectedSite.staffStats.supervisors}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span>Other Staff:</span>
+                                <span>{selectedSite.staffStats.employees}</span>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </TabsContent>
+
+                    {/* Tasks Tab */}
+                    <TabsContent value="tasks" className="space-y-4">
+                      {selectedSite.tasks.length === 0 ? (
+                        <div className="text-center py-8">
+                          <Briefcase className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                          <p className="text-muted-foreground">No tasks assigned to this site</p>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="font-medium">{formatCurrency(site.contractValue)}</div>
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <Calendar className="h-3 w-3" />
-                            Ends: {formatDate(site.contractEndDate)}
-                          </div>
+                      ) : (
+                        <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                          {selectedSite.tasks.map((task) => (
+                            <Card key={task._id} className="hover:shadow-md transition-shadow">
+                              <CardContent className="p-4">
+                                <div className="flex items-start justify-between mb-2">
+                                  <div>
+                                    <div className="font-semibold">{task.title}</div>
+                                    <div className="text-sm text-muted-foreground line-clamp-1">
+                                      {task.description}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Badge variant={getPriorityColor(task.priority)}>
+                                      {task.priority}
+                                    </Badge>
+                                    <Badge variant={getStatusColor(task.status)}>
+                                      <span className="flex items-center gap-1">
+                                        {getStatusIcon(task.status)}
+                                        {task.status}
+                                      </span>
+                                    </Badge>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 text-sm mb-3">
+                                  <div className="flex items-center gap-1 text-muted-foreground">
+                                    <Calendar className="h-3 w-3" />
+                                    Due: {formatDate(task.dueDateTime)}
+                                  </div>
+                                  <div className="flex items-center gap-1 text-muted-foreground">
+                                    <Users className="h-3 w-3" />
+                                    {task.assignedUsers?.length || 1} assignee(s)
+                                  </div>
+                                </div>
+
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleViewTask(task)}
+                                  >
+                                    <Eye className="h-3 w-3 mr-1" />
+                                    View
+                                  </Button>
+                                  {task.status !== 'completed' && task.status !== 'cancelled' && (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleUpdateTaskStatus(task._id, 'completed')}
+                                    >
+                                      <CheckCircle className="h-3 w-3 mr-1" />
+                                      Complete
+                                    </Button>
+                                  )}
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))}
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge 
-                          variant={site.status === "active" ? "default" : "secondary"}
-                          className={site.status === "active" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}
-                        >
-                          {site.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => handleToggleStatus(site.id)}
-                          >
-                            {site.status === "active" ? "Deactivate" : "Activate"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleEditSite(site)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => handleDeleteSite(site.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                      )}
+                    </TabsContent>
+
+                    {/* Staff Tab */}
+                    <TabsContent value="staff" className="space-y-4">
+                      {!selectedSite.staffDeployment || selectedSite.staffDeployment.length === 0 ? (
+                        <div className="text-center py-8">
+                          <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                          <p className="text-muted-foreground">No staff deployed to this site</p>
                         </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                      ) : (
+                        <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                          {selectedSite.staffDeployment.map((deploy, index) => (
+                            <Card key={index}>
+                              <CardContent className="p-4">
+                                <div className="flex justify-between items-center">
+                                  <div className="flex items-center gap-3">
+                                    <User className="h-5 w-5 text-muted-foreground" />
+                                    <div>
+                                      <div className="font-medium">{deploy.role}</div>
+                                      <div className="text-sm text-muted-foreground">
+                                        Staff assigned to this role
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <Badge variant="outline" className="text-lg">
+                                    {deploy.count} {deploy.count === 1 ? 'person' : 'people'}
+                                  </Badge>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))}
+
+                          {/* Staff Summary */}
+                          <Card className="bg-primary/5">
+                            <CardContent className="p-4">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <Users className="h-5 w-5 text-primary" />
+                                  <div>
+                                    <div className="font-medium">Total Staff</div>
+                                    <div className="text-sm text-muted-foreground">
+                                      All roles combined
+                                    </div>
+                                  </div>
+                                </div>
+                                <Badge variant="default" className="text-lg">
+                                  {selectedSite.staffStats.total} total
+                                </Badge>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </div>
+                      )}
+                    </TabsContent>
+                  </Tabs>
+                </CardContent>
+              </>
+            ) : (
+              <CardContent className="p-12 text-center">
+                <Building2 className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                <p className="text-muted-foreground">Select a site to view details</p>
+              </CardContent>
             )}
-          </div>
-        </CardContent>
-      </Card>
+          </Card>
+        </div>
+      </div>
+
+      {/* Task Details Dialog */}
+      {selectedTask && (
+        <Dialog open={showTaskDetails} onOpenChange={setShowTaskDetails}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                Task Details
+              </DialogTitle>
+            </DialogHeader>
+            
+            <div className="space-y-6">
+              {/* Task Info */}
+              <div>
+                <h3 className="font-semibold mb-2">{selectedTask.title}</h3>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                  {selectedTask.description}
+                </p>
+              </div>
+
+              {/* Metadata */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-sm text-muted-foreground">Site</div>
+                  <div className="font-medium flex items-center gap-2">
+                    <Building2 className="h-4 w-4" />
+                    {selectedTask.siteDetails?.name || selectedTask.siteName}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Client</div>
+                  <div className="font-medium">{selectedTask.clientName}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Priority</div>
+                  <Badge variant={getPriorityColor(selectedTask.priority)}>
+                    {selectedTask.priority}
+                  </Badge>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Status</div>
+                  <Badge variant={getStatusColor(selectedTask.status)}>
+                    <span className="flex items-center gap-1">
+                      {getStatusIcon(selectedTask.status)}
+                      {selectedTask.status}
+                    </span>
+                  </Badge>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Deadline</div>
+                  <div className="font-medium flex items-center gap-2">
+                    <Calendar className="h-4 w-4" />
+                    {formatDate(selectedTask.deadline)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Due Date & Time</div>
+                  <div className="font-medium">
+                    {formatDate(selectedTask.dueDateTime)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Assignees */}
+              <div>
+                <div className="text-sm text-muted-foreground mb-2">Assignees</div>
+                <div className="space-y-2">
+                  {selectedTask.assignedUsers?.map((user, index) => (
+                    <div key={index} className="flex items-center gap-2 p-2 border rounded">
+                      <User className="h-4 w-4" />
+                      <div>
+                        <div className="font-medium">{user.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="ml-auto">
+                        {user.status}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Attachments */}
+              {selectedTask.attachments && selectedTask.attachments.length > 0 && (
+                <div>
+                  <div className="text-sm text-muted-foreground mb-2">Attachments</div>
+                  <div className="space-y-2">
+                    {selectedTask.attachments.map((attachment) => (
+                      <div key={attachment.id} className="flex items-center justify-between p-2 border rounded">
+                        <div className="flex items-center gap-2">
+                          <Paperclip className="h-4 w-4" />
+                          <div>
+                            <div className="font-medium">{attachment.filename}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {formatDate(attachment.uploadedAt)}
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => window.open(attachment.url, '_blank')}
+                        >
+                          View
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-4 border-t">
+                {selectedTask.status !== 'completed' && selectedTask.status !== 'cancelled' && (
+                  <Button
+                    className="flex-1"
+                    onClick={() => {
+                      handleUpdateTaskStatus(selectedTask._id, 'completed');
+                      setShowTaskDetails(false);
+                    }}
+                  >
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Mark as Completed
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setShowTaskDetails(false)}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };
 
-export default SitesSection;
+export default ManagerSitesPage;

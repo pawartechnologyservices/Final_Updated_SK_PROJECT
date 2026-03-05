@@ -8,9 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FileText, Plus, Upload, Trash2, Camera, X, Save, Edit, Download, Loader2, UserCheck, User } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import axios from "axios";
 
 // Define the API Base URL
-const API_URL = `http://${window.location.hostname}:5001/api`;
+const API_URL = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:5001/api' 
+  : '/api';
 
 // Types
 interface Employee {
@@ -196,13 +199,29 @@ interface EPFForm11Data {
   employerDeclarationDate: string;
 }
 
+interface Site {
+  _id: string;
+  name: string;
+  clientName?: string;
+  location?: string;
+  status?: string;
+}
+
+interface User {
+  _id: string;
+  id?: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
 // FIXED ERROR #2: Added sites prop to the interface
 interface OnboardingTabProps {
   employees: Employee[];
   setEmployees: React.Dispatch<React.SetStateAction<Employee[]>>;
   salaryStructures: SalaryStructure[];
   setSalaryStructures: React.Dispatch<React.SetStateAction<SalaryStructure[]>>;
-  sites?: any[]; // Added sites prop - you can replace 'any' with your Site type if you have one
+  sites?: Site[]; // Added sites prop - now using proper Site type
   newJoinees?: Employee[];
   setNewJoinees?: React.Dispatch<React.SetStateAction<Employee[]>>;
   leftEmployees?: Employee[];
@@ -291,7 +310,7 @@ const resetNewEmployeeForm = () => ({
   authorizedSignature: null
 });
 
-// FIXED ERROR #2: Added sites prop to function parameters
+// FIXED #1: Added sites prop to function parameters and fetch supervisor sites
 const OnboardingTab = ({ 
   employees, 
   setEmployees, 
@@ -578,204 +597,218 @@ const OnboardingTab = ({
     }
   };
 
-  const handleAddEmployee = async () => {
-    // Validate required fields
-    if (!newEmployee.name || !newEmployee.email || !newEmployee.aadharNumber || !newEmployee.position || !newEmployee.department) {
-      toast.error("Please fill all required fields (Name, Email, Aadhar Number, Position, Department)");
-      return;
+const handleAddEmployee = async () => {
+  // Validate required fields
+  if (!newEmployee.name || !newEmployee.email || !newEmployee.aadharNumber || !newEmployee.position || !newEmployee.department) {
+    toast.error("Please fill all required fields (Name, Email, Aadhar Number, Position, Department)");
+    return;
+  }
+
+  // Validate phone number
+  if (newEmployee.phone && !/^\d{10}$/.test(newEmployee.phone)) {
+    toast.error("Please enter a valid 10-digit phone number");
+    return;
+  }
+
+  // Validate Aadhar number
+  if (!/^\d{12}$/.test(newEmployee.aadharNumber)) {
+    toast.error("Please enter a valid 12-digit Aadhar number");
+    return;
+  }
+
+  // Validate PAN number if provided
+  if (newEmployee.panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(newEmployee.panNumber.toUpperCase())) {
+    toast.error("Please enter a valid PAN number (format: ABCDE1234F)");
+    return;
+  }
+
+  // Validate salary
+  if (!newEmployee.salary || parseFloat(newEmployee.salary) <= 0) {
+    toast.error("Please enter a valid salary amount");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // Create FormData object
+    const formData = new FormData();
+
+    // Add employee photo if exists
+    if (newEmployee.photo instanceof File) {
+      formData.append('photo', newEmployee.photo);
     }
 
-    // Validate phone number
-    if (newEmployee.phone && !/^\d{10}$/.test(newEmployee.phone)) {
-      toast.error("Please enter a valid 10-digit phone number");
-      return;
+    // Add employee signature if exists
+    if (newEmployee.employeeSignature instanceof File) {
+      formData.append('employeeSignature', newEmployee.employeeSignature);
     }
 
-    // Validate Aadhar number
-    if (!/^\d{12}$/.test(newEmployee.aadharNumber)) {
-      toast.error("Please enter a valid 12-digit Aadhar number");
-      return;
+    // Add authorized signature if exists
+    if (newEmployee.authorizedSignature instanceof File) {
+      formData.append('authorizedSignature', newEmployee.authorizedSignature);
     }
 
-    // Validate PAN number if provided
-    if (newEmployee.panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(newEmployee.panNumber.toUpperCase())) {
-      toast.error("Please enter a valid PAN number (format: ABCDE1234F)");
-      return;
-    }
+    // Add other form data
+    const employeeDataToSend = {
+      name: newEmployee.name,
+      email: newEmployee.email,
+      phone: newEmployee.phone,
+      aadharNumber: newEmployee.aadharNumber,
+      panNumber: newEmployee.panNumber?.toUpperCase() || '',
+      esicNumber: newEmployee.esicNumber,
+      uanNumber: newEmployee.uanNumber,
+      siteName: newEmployee.siteName,
+      dateOfBirth: newEmployee.dateOfBirth,
+      dateOfJoining: newEmployee.dateOfJoining,
+      dateOfExit: newEmployee.dateOfExit,
+      bloodGroup: newEmployee.bloodGroup,
+      gender: newEmployee.gender,
+      maritalStatus: newEmployee.maritalStatus,
+      permanentAddress: newEmployee.permanentAddress,
+      permanentPincode: newEmployee.permanentPincode,
+      localAddress: newEmployee.localAddress,
+      localPincode: newEmployee.localPincode,
+      bankName: newEmployee.bankName,
+      accountNumber: newEmployee.accountNumber,
+      ifscCode: newEmployee.ifscCode.toUpperCase(),
+      branchName: newEmployee.branchName,
+      fatherName: newEmployee.fatherName,
+      motherName: newEmployee.motherName,
+      spouseName: newEmployee.spouseName,
+      numberOfChildren: newEmployee.numberOfChildren,
+      emergencyContactName: newEmployee.emergencyContactName,
+      emergencyContactPhone: newEmployee.emergencyContactPhone,
+      emergencyContactRelation: newEmployee.emergencyContactRelation,
+      nomineeName: newEmployee.nomineeName,
+      nomineeRelation: newEmployee.nomineeRelation,
+      pantSize: newEmployee.pantSize,
+      shirtSize: newEmployee.shirtSize,
+      capSize: newEmployee.capSize,
+      idCardIssued: newEmployee.idCardIssued,
+      westcoatIssued: newEmployee.westcoatIssued,
+      apronIssued: newEmployee.apronIssued,
+      department: newEmployee.department,
+      position: newEmployee.position,
+      salary: newEmployee.salary
+    };
 
-    // Validate salary
-    if (!newEmployee.salary || parseFloat(newEmployee.salary) <= 0) {
-      toast.error("Please enter a valid salary amount");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      // Create FormData object
-      const formData = new FormData();
-
-      // Add employee photo if exists
-      if (newEmployee.photo instanceof File) {
-        formData.append('photo', newEmployee.photo);
+    // Append all other data
+    Object.entries(employeeDataToSend).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        formData.append(key, value.toString());
       }
+    });
 
-      // Add employee signature if exists
-      if (newEmployee.employeeSignature instanceof File) {
-        formData.append('employeeSignature', newEmployee.employeeSignature);
-      }
+    console.log('Sending employee data to backend...');
 
-      // Add authorized signature if exists
-      if (newEmployee.authorizedSignature instanceof File) {
-        formData.append('authorizedSignature', newEmployee.authorizedSignature);
-      }
+    const response = await fetch(`${API_URL}/employees`, {
+      method: "POST",
+      body: formData
+    });
 
-      // Add other form data
-      const employeeDataToSend = {
-        name: newEmployee.name,
-        email: newEmployee.email,
-        phone: newEmployee.phone,
-        aadharNumber: newEmployee.aadharNumber,
-        panNumber: newEmployee.panNumber?.toUpperCase() || '',
-        esicNumber: newEmployee.esicNumber,
-        uanNumber: newEmployee.uanNumber,
-        siteName: newEmployee.siteName,
-        dateOfBirth: newEmployee.dateOfBirth,
-        dateOfJoining: newEmployee.dateOfJoining,
-        dateOfExit: newEmployee.dateOfExit,
-        bloodGroup: newEmployee.bloodGroup,
-        gender: newEmployee.gender,
-        maritalStatus: newEmployee.maritalStatus,
-        permanentAddress: newEmployee.permanentAddress,
-        permanentPincode: newEmployee.permanentPincode,
-        localAddress: newEmployee.localAddress,
-        localPincode: newEmployee.localPincode,
-        bankName: newEmployee.bankName,
-        accountNumber: newEmployee.accountNumber,
-        ifscCode: newEmployee.ifscCode.toUpperCase(),
-        branchName: newEmployee.branchName,
-        fatherName: newEmployee.fatherName,
-        motherName: newEmployee.motherName,
-        spouseName: newEmployee.spouseName,
-        numberOfChildren: newEmployee.numberOfChildren,
-        emergencyContactName: newEmployee.emergencyContactName,
-        emergencyContactPhone: newEmployee.emergencyContactPhone,
-        emergencyContactRelation: newEmployee.emergencyContactRelation,
-        nomineeName: newEmployee.nomineeName,
-        nomineeRelation: newEmployee.nomineeRelation,
-        pantSize: newEmployee.pantSize,
-        shirtSize: newEmployee.shirtSize,
-        capSize: newEmployee.capSize,
-        idCardIssued: newEmployee.idCardIssued,
-        westcoatIssued: newEmployee.westcoatIssued,
-        apronIssued: newEmployee.apronIssued,
-        department: newEmployee.department,
-        position: newEmployee.position,
-        salary: newEmployee.salary
-      };
+    const data = await response.json();
 
-      // Append all other data
-      Object.entries(employeeDataToSend).forEach(([key, value]) => {
-        if (value !== undefined && value !== null && value !== '') {
-          formData.append(key, value.toString());
-        }
-      });
-
-      console.log('Sending employee data to backend...');
-
-      const response = await fetch(`${API_URL}/employees`, {
-        method: "POST",
-        body: formData
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || data.error || "Failed to create employee");
-      }
-
-      toast.success("Employee created successfully!");
-      
-      // The backend returns the employee data with Cloudinary URLs
-      const createdEmployee = data.employee;
-      
-      // Debug: Log the created employee data
-      console.log('Created employee data:', createdEmployee);
-      
-      if (!createdEmployee) {
-        throw new Error('No employee data returned from server');
-      }
-      
-      // Ensure the employee object has all required properties
-      const processedEmployee: Employee = {
-        _id: createdEmployee._id,
-        employeeId: createdEmployee.employeeId,
-        name: createdEmployee.name,
-        email: createdEmployee.email,
-        phone: createdEmployee.phone,
-        aadharNumber: createdEmployee.aadharNumber,
-        department: createdEmployee.department,
-        position: createdEmployee.position,
-        joinDate: createdEmployee.joinDate || createdEmployee.dateOfJoining,
-        dateOfJoining: createdEmployee.dateOfJoining,
-        status: createdEmployee.status || 'active',
-        salary: createdEmployee.salary || 0,
-        uanNumber: createdEmployee.uanNumber,
-        uan: createdEmployee.uan,
-        esicNumber: createdEmployee.esicNumber,
-        panNumber: createdEmployee.panNumber,
-        photo: createdEmployee.photo,
-        siteName: createdEmployee.siteName,
-        dateOfBirth: createdEmployee.dateOfBirth,
-        bloodGroup: createdEmployee.bloodGroup,
-        gender: createdEmployee.gender,
-        maritalStatus: createdEmployee.maritalStatus,
-        permanentAddress: createdEmployee.permanentAddress,
-        permanentPincode: createdEmployee.permanentPincode,
-        localAddress: createdEmployee.localAddress,
-        localPincode: createdEmployee.localPincode,
-        bankName: createdEmployee.bankName,
-        accountNumber: createdEmployee.accountNumber,
-        ifscCode: createdEmployee.ifscCode,
-        branchName: createdEmployee.branchName,
-        fatherName: createdEmployee.fatherName,
-        motherName: createdEmployee.motherName,
-        spouseName: createdEmployee.spouseName,
-        numberOfChildren: createdEmployee.numberOfChildren,
-        emergencyContactName: createdEmployee.emergencyContactName,
-        emergencyContactPhone: createdEmployee.emergencyContactPhone,
-        emergencyContactRelation: createdEmployee.emergencyContactRelation,
-        nomineeName: createdEmployee.nomineeName,
-        nomineeRelation: createdEmployee.nomineeRelation,
-        pantSize: createdEmployee.pantSize,
-        shirtSize: createdEmployee.shirtSize,
-        capSize: createdEmployee.capSize,
-        idCardIssued: createdEmployee.idCardIssued || false,
-        westcoatIssued: createdEmployee.westcoatIssued || false,
-        apronIssued: createdEmployee.apronIssued || false,
-        employeeSignature: createdEmployee.employeeSignature,
-        authorizedSignature: createdEmployee.authorizedSignature,
-        createdAt: createdEmployee.createdAt,
-        updatedAt: createdEmployee.updatedAt
-      };
-      
-      // Update employees list with the new employee
-      setEmployees(prev => [...prev, processedEmployee]);
-      
-      // Reset form FIRST
-      setNewEmployee(resetNewEmployeeForm());
-      setUploadedDocuments([]);
-      
-      // Then initialize EPF Form and switch tabs
-      initializeEPFForm(processedEmployee);
-
-    } catch (error: any) {
-      console.error("Error creating employee:", error);
-      toast.error(error.message || "Error creating employee. Please try again.");
-    } finally {
-      setLoading(false);
+    if (!response.ok) {
+      throw new Error(data.message || data.error || "Failed to create employee");
     }
-  };
+
+    // Check different response formats
+    let createdEmployee;
+    
+    if (data.employee) {
+      // Format: { success: true, employee: {...} }
+      createdEmployee = data.employee;
+    } else if (data.data) {
+      // Format: { success: true, data: {...} }
+      createdEmployee = data.data;
+    } else if (data.employees && data.employees.length > 0) {
+      // Format: { success: true, employees: [...] }
+      createdEmployee = data.employees[0];
+    } else if (data._id) {
+      // Format: direct employee object
+      createdEmployee = data;
+    }
+
+    console.log('Created employee data:', createdEmployee);
+
+    if (!createdEmployee) {
+      console.error('Server response:', data);
+      throw new Error('No employee data returned from server. Server response: ' + JSON.stringify(data));
+    }
+
+    toast.success("Employee created successfully!");
+    
+    // Ensure the employee object has all required properties
+    const processedEmployee: Employee = {
+      _id: createdEmployee._id,
+      employeeId: createdEmployee.employeeId,
+      name: createdEmployee.name,
+      email: createdEmployee.email,
+      phone: createdEmployee.phone,
+      aadharNumber: createdEmployee.aadharNumber,
+      department: createdEmployee.department,
+      position: createdEmployee.position,
+      joinDate: createdEmployee.joinDate || createdEmployee.dateOfJoining,
+      dateOfJoining: createdEmployee.dateOfJoining,
+      status: createdEmployee.status || 'active',
+      salary: createdEmployee.salary || 0,
+      uanNumber: createdEmployee.uanNumber,
+      uan: createdEmployee.uan,
+      esicNumber: createdEmployee.esicNumber,
+      panNumber: createdEmployee.panNumber,
+      photo: createdEmployee.photo,
+      siteName: createdEmployee.siteName,
+      dateOfBirth: createdEmployee.dateOfBirth,
+      bloodGroup: createdEmployee.bloodGroup,
+      gender: createdEmployee.gender,
+      maritalStatus: createdEmployee.maritalStatus,
+      permanentAddress: createdEmployee.permanentAddress,
+      permanentPincode: createdEmployee.permanentPincode,
+      localAddress: createdEmployee.localAddress,
+      localPincode: createdEmployee.localPincode,
+      bankName: createdEmployee.bankName,
+      accountNumber: createdEmployee.accountNumber,
+      ifscCode: createdEmployee.ifscCode,
+      branchName: createdEmployee.branchName,
+      fatherName: createdEmployee.fatherName,
+      motherName: createdEmployee.motherName,
+      spouseName: createdEmployee.spouseName,
+      numberOfChildren: createdEmployee.numberOfChildren,
+      emergencyContactName: createdEmployee.emergencyContactName,
+      emergencyContactPhone: createdEmployee.emergencyContactPhone,
+      emergencyContactRelation: createdEmployee.emergencyContactRelation,
+      nomineeName: createdEmployee.nomineeName,
+      nomineeRelation: createdEmployee.nomineeRelation,
+      pantSize: createdEmployee.pantSize,
+      shirtSize: createdEmployee.shirtSize,
+      capSize: createdEmployee.capSize,
+      idCardIssued: createdEmployee.idCardIssued || false,
+      westcoatIssued: createdEmployee.westcoatIssued || false,
+      apronIssued: createdEmployee.apronIssued || false,
+      employeeSignature: createdEmployee.employeeSignature,
+      authorizedSignature: createdEmployee.authorizedSignature,
+      createdAt: createdEmployee.createdAt,
+      updatedAt: createdEmployee.updatedAt
+    };
+    
+    // Update employees list with the new employee
+    setEmployees(prev => [...prev, processedEmployee]);
+    
+    // Reset form FIRST
+    setNewEmployee(resetNewEmployeeForm());
+    setUploadedDocuments([]);
+    
+    // Then initialize EPF Form and switch tabs
+    initializeEPFForm(processedEmployee);
+
+  } catch (error: any) {
+    console.error("Error creating employee:", error);
+    toast.error(error.message || "Error creating employee. Please try again.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleDocumentUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -1506,13 +1539,35 @@ const OnboardingTab = ({
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                    {/* UPDATED: Site Name dropdown with sites from props */}
                     <FormField label="Site Name" id="siteName">
-                      <Input
-                        id="siteName"
-                        value={newEmployee.siteName}
-                        onChange={(e) => setNewEmployee({...newEmployee, siteName: e.target.value})}
-                        placeholder="Enter site name"
-                      />
+                      <Select 
+                        value={newEmployee.siteName} 
+                        onValueChange={(value) => setNewEmployee({...newEmployee, siteName: value})}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select site" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sites && sites.length > 0 ? (
+                            sites.map((site) => (
+                              <SelectItem key={site._id} value={site.name}>
+                                {site.name}
+                                {site.clientName && ` - ${site.clientName}`}
+                              </SelectItem>
+                            ))
+                          ) : (
+                            <SelectItem value="no-sites" disabled>
+                              No sites assigned
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      {sites && sites.length === 0 && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          No sites are assigned to you. Please contact administrator.
+                        </p>
+                      )}
                     </FormField>
                     
                     <FormField label="Name" id="name" required>

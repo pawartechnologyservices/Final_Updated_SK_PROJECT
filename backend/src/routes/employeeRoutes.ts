@@ -55,6 +55,187 @@ const excelUpload = multer({
   }
 });
 
+// ==================== BULK OPERATIONS ROUTES ====================
+// THESE MUST COME FIRST - BEFORE ANY /:id ROUTES
+
+// Bulk update employees site
+router.patch('/bulk/site', async (req: any, res: any) => {
+  try {
+    const { employeeIds, siteName } = req.body;
+    
+    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide an array of employee IDs' 
+      });
+    }
+    
+    if (!siteName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide a site name' 
+      });
+    }
+    
+    // Validate that all employee IDs exist
+    const employees = await Employee.find({ _id: { $in: employeeIds } });
+    
+    if (employees.length !== employeeIds.length) {
+      const foundIds = employees.map(emp => emp._id.toString());
+      const missingIds = employeeIds.filter(id => !foundIds.includes(id));
+      return res.status(404).json({ 
+        success: false, 
+        message: `Some employees not found: ${missingIds.join(', ')}` 
+      });
+    }
+    
+    // Update all employees with the given IDs
+    const result = await Employee.updateMany(
+      { _id: { $in: employeeIds } },
+      { $set: { siteName: siteName } }
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: `Successfully updated ${result.modifiedCount} employees`,
+      data: {
+        modifiedCount: result.modifiedCount,
+        matchedCount: result.matchedCount
+      }
+    });
+  } catch (error: any) {
+    console.error('Error in bulk site assignment:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while updating employees',
+      error: error.message 
+    });
+  }
+});
+
+// Bulk delete employees
+router.delete('/bulk', async (req: any, res: any) => {
+  try {
+    const { employeeIds } = req.body;
+    
+    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide an array of employee IDs' 
+      });
+    }
+    
+    // Validate that all employee IDs exist
+    const employees = await Employee.find({ _id: { $in: employeeIds } });
+    
+    if (employees.length !== employeeIds.length) {
+      const foundIds = employees.map(emp => emp._id.toString());
+      const missingIds = employeeIds.filter(id => !foundIds.includes(id));
+      return res.status(404).json({ 
+        success: false, 
+        message: `Some employees not found: ${missingIds.join(', ')}` 
+      });
+    }
+    
+    // Delete all employees with the given IDs
+    const result = await Employee.deleteMany({ _id: { $in: employeeIds } });
+    
+    res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} employees`,
+      data: {
+        deletedCount: result.deletedCount
+      }
+    });
+  } catch (error: any) {
+    console.error('Error in bulk delete:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while deleting employees',
+      error: error.message 
+    });
+  }
+});
+
+// Bulk update employees status
+router.patch('/bulk/status', async (req: any, res: any) => {
+  try {
+    const { employeeIds, status } = req.body;
+    
+    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide an array of employee IDs' 
+      });
+    }
+    
+    if (!status || !['active', 'inactive', 'left'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide a valid status (active, inactive, or left)' 
+      });
+    }
+    
+    const updateData: any = { status };
+    
+    // If marking as left, add exit date
+    if (status === 'left') {
+      updateData.dateOfExit = new Date();
+    }
+    
+    // Update all employees with the given IDs
+    const result = await Employee.updateMany(
+      { _id: { $in: employeeIds } },
+      { $set: updateData }
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: `Successfully updated status for ${result.modifiedCount} employees`,
+      data: {
+        modifiedCount: result.modifiedCount,
+        matchedCount: result.matchedCount
+      }
+    });
+  } catch (error: any) {
+    console.error('Error in bulk status update:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while updating employees status',
+      error: error.message 
+    });
+  }
+});
+
+// Get employees by IDs (for verification)
+router.post('/bulk/get', async (req: any, res: any) => {
+  try {
+    const { employeeIds } = req.body;
+    
+    if (!employeeIds || !Array.isArray(employeeIds)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Please provide an array of employee IDs' 
+      });
+    }
+    
+    const employees = await Employee.find({ _id: { $in: employeeIds } })
+      .select('employeeId name department siteName status');
+    
+    res.status(200).json({
+      success: true,
+      data: employees
+    });
+  } catch (error: any) {
+    console.error('Error fetching bulk employees:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while fetching employees',
+      error: error.message 
+    });
+  }
+});
+
 // ==================== CRUD ROUTES ====================
 
 // Create employee

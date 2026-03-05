@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Eye, Trash2, Plus, Download, Sheet, User, Edit, Camera, FileText, ArrowUpDown, Calendar, Files, AlertCircle, Loader2, Save } from "lucide-react";
+import { Eye, Trash2, Plus, Download, Sheet, User, Edit, Camera, FileText, ArrowUpDown, Calendar, Files, AlertCircle, Loader2, Save, Upload, Database, Cloud, CheckCircle, XCircle, Users, Building, Shield, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Employee } from "./types";
 import StatCard from "./StatCard";
@@ -15,12 +15,15 @@ import SearchBar from "./SearchBar";
 import Pagination from "./Pagination";
 import ExcelImportDialog from "./ExcelImportDialog";
 import axios from "axios";
+import * as XLSX from 'xlsx';
 
 interface EmployeesTabProps {
   setActiveTab: (tab: string) => void;
 }
 
-const API_URL = `http://${window.location.hostname}:5001/api`;
+const API_URL = process.env.NODE_ENV === 'development' 
+  ? `http://localhost:5001/api` 
+  : '/api';
 
 // EPF Form 11 Type
 interface EPFForm11Data {
@@ -73,13 +76,48 @@ interface EPFForm11Data {
   physicalClaimFiled: boolean;
 }
 
+// Site interface for API response with staff requirements
+interface Site {
+  _id: string;
+  name: string;
+  location?: string;
+  address?: string;
+  status?: 'active' | 'inactive';
+  managerCount?: number;
+  supervisorCount?: number;
+  staffDeployment?: Array<{ role: string; count: number }>;
+}
+
+// Site deployment status interface
+interface SiteDeploymentStatus {
+  siteName: string;
+  managerCount: number;
+  managerRequirement: number;
+  supervisorCount: number;
+  supervisorRequirement: number;
+  staffCount: number;
+  staffRequirement: number;
+  totalStaff: number;
+  isManagerFull: boolean;
+  isSupervisorFull: boolean;
+  isStaffFull: boolean;
+  remainingManagers: number;
+  remainingSupervisors: number;
+  remainingStaff: number;
+  details: {
+    managers: Employee[];
+    supervisors: Employee[];
+    staff: Employee[];
+  };
+}
+
 const EmployeesTab = ({ 
   setActiveTab
 }: EmployeesTabProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [employeesPage, setEmployeesPage] = useState(1);
-  const [employeesItemsPerPage, setEmployeesItemsPerPage] = useState(5);
+  const [employeesItemsPerPage, setEmployeesItemsPerPage] = useState(100);
   const [sortBy, setSortBy] = useState<string>("");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
   const [selectedSite, setSelectedSite] = useState<string>("all");
@@ -90,6 +128,23 @@ const EmployeesTab = ({
   const [selectedEmployeeForEPF, setSelectedEmployeeForEPF] = useState<Employee | null>(null);
   const [isSavingEPF, setIsSavingEPF] = useState(false);
   
+  // New state for bulk operations
+  const [bulkSiteDialogOpen, setBulkSiteDialogOpen] = useState(false);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
+  const [selectAll, setSelectAll] = useState(false);
+  const [selectedSiteForBulk, setSelectedSiteForBulk] = useState("");
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  
+  // Sites data from API
+  const [sitesFromAPI, setSitesFromAPI] = useState<Site[]>([]);
+  const [loadingSites, setLoadingSites] = useState(false);
+  
+  // Site deployment status
+  const [siteDeploymentStatus, setSiteDeploymentStatus] = useState<Map<string, SiteDeploymentStatus>>(new Map());
+  const [loadingDeploymentStatus, setLoadingDeploymentStatus] = useState(false);
+  
   // Employees data from API
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
@@ -98,6 +153,7 @@ const EmployeesTab = ({
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   
   const [epfFormData, setEpfFormData] = useState<EPFForm11Data>({
     memberName: "",
@@ -153,6 +209,18 @@ const EmployeesTab = ({
     fetchEmployees();
   }, [employeesPage, employeesItemsPerPage, searchTerm, selectedDepartment, selectedSite, selectedJoinDate, sortBy]);
 
+  // Fetch sites from API
+  useEffect(() => {
+    fetchSites();
+  }, []);
+
+  // Calculate site deployment status whenever employees or sites change
+  useEffect(() => {
+    if (employees.length > 0 && sitesFromAPI.length > 0) {
+      calculateSiteDeploymentStatus();
+    }
+  }, [employees, sitesFromAPI]);
+
   const fetchEmployees = async () => {
     try {
       setLoading(true);
@@ -174,10 +242,9 @@ const EmployeesTab = ({
       
       const response = await axios.get(`${API_URL}/employees`, { params });
       
-      console.log("API Response:", response.data); // Debug log
+      console.log("API Response:", response.data);
       
       if (response.data && response.data.success) {
-        // Check if data exists and is an array
         const apiData = response.data.data || response.data.employees || [];
         
         if (!Array.isArray(apiData)) {
@@ -188,11 +255,8 @@ const EmployeesTab = ({
           return;
         }
         
-        // Transform API data to match Employee interface
         const transformedEmployees = apiData.map((emp: any, index: number) => {
-          console.log(`Processing employee ${index}:`, emp); // Debug log
-          
-          return {
+          const employee = {
             id: emp._id || emp.id || `emp_${index}`,
             employeeId: emp.employeeId || emp.employeeID || `EMP${String(index + 1).padStart(4, '0')}`,
             name: emp.name || emp.employeeName || "Unknown",
@@ -215,6 +279,7 @@ const EmployeesTab = ({
             status: emp.status || "active",
             documents: emp.documents || [],
             photo: emp.photo || null,
+            photoPublicId: emp.photoPublicId || null,
             fatherName: emp.fatherName || "",
             motherName: emp.motherName || "",
             spouseName: emp.spouseName || "",
@@ -229,17 +294,30 @@ const EmployeesTab = ({
             emergencyContactName: emp.emergencyContactName || "",
             emergencyContactPhone: emp.emergencyContactPhone || "",
             emergencyContactRelation: emp.emergencyContactRelation || "",
+            isManager: false,
+            isSupervisor: false
           };
+          
+          // Set manager/supervisor flags
+          const position = employee.position?.toLowerCase() || '';
+          const department = employee.department?.toLowerCase() || '';
+          
+          employee.isManager = position.includes('manager') || department.includes('manager');
+          employee.isSupervisor = position.includes('supervisor') || department.includes('supervisor');
+          
+          return employee;
         });
         
         setEmployees(transformedEmployees);
-        setTotalEmployees(response.data.pagination?.total || response.data.total || transformedEmployees.length);
-        console.log("Transformed employees:", transformedEmployees); // Debug log
+        
+        const totalFromAPI = response.data.pagination?.total || response.data.total || response.data.count || 0;
+        setTotalEmployees(totalFromAPI);
       } else {
         const errorMsg = response.data?.message || "Failed to fetch employees";
         setError(errorMsg);
         toast.error(errorMsg);
         setEmployees([]);
+        setTotalEmployees(0);
       }
     } catch (err: any) {
       console.error("Error fetching employees:", err);
@@ -247,16 +325,222 @@ const EmployeesTab = ({
       setError(errorMsg);
       toast.error("Error loading employees: " + errorMsg);
       setEmployees([]);
+      setTotalEmployees(0);
     } finally {
       setLoading(false);
     }
   };
 
-  // Get unique departments and sites for filters
-  const departments = Array.from(new Set(employees.map(emp => emp.department))).filter(Boolean);
-  const sites = Array.from(new Set(employees.map(emp => emp.siteName))).filter(Boolean);
+  // Fetch sites from API
+  const fetchSites = async () => {
+    try {
+      setLoadingSites(true);
+      const response = await axios.get(`${API_URL}/sites`);
+      
+      console.log("Sites API Response:", response.data);
+      
+      // Handle different API response structures
+      if (response.data) {
+        if (response.data.success && Array.isArray(response.data.data)) {
+          // If API returns { success: true, data: [...] }
+          setSitesFromAPI(response.data.data);
+        } else if (Array.isArray(response.data)) {
+          // If API returns array directly
+          setSitesFromAPI(response.data);
+        } else if (response.data.sites && Array.isArray(response.data.sites)) {
+          // If API returns { sites: [...] }
+          setSitesFromAPI(response.data.sites);
+        } else {
+          console.warn("Unexpected sites API response format:", response.data);
+          setSitesFromAPI([]);
+        }
+      }
+    } catch (err: any) {
+      console.error("Error fetching sites:", err);
+      // Don't show error toast for sites, just log it
+      setSitesFromAPI([]);
+    } finally {
+      setLoadingSites(false);
+    }
+  };
 
-  // Filter employees based on search term and selected filters (client-side as backup)
+  // Calculate site deployment status
+  const calculateSiteDeploymentStatus = () => {
+    setLoadingDeploymentStatus(true);
+    
+    const statusMap = new Map<string, SiteDeploymentStatus>();
+    
+    // Initialize with sites from API
+    sitesFromAPI.forEach(site => {
+      // Calculate staff requirement from staffDeployment (excluding managers and supervisors)
+      const staffRequirement = Array.isArray(site.staffDeployment) 
+        ? site.staffDeployment.reduce((total, item) => {
+            const role = item.role?.toLowerCase() || '';
+            if (!role.includes('manager') && !role.includes('supervisor')) {
+              return total + (Number(item.count) || 0);
+            }
+            return total;
+          }, 0)
+        : 0;
+      
+      statusMap.set(site.name, {
+        siteName: site.name,
+        managerCount: 0,
+        managerRequirement: site.managerCount || 0,
+        supervisorCount: 0,
+        supervisorRequirement: site.supervisorCount || 0,
+        staffCount: 0,
+        staffRequirement: staffRequirement,
+        totalStaff: 0,
+        isManagerFull: false,
+        isSupervisorFull: false,
+        isStaffFull: false,
+        remainingManagers: site.managerCount || 0,
+        remainingSupervisors: site.supervisorCount || 0,
+        remainingStaff: staffRequirement,
+        details: {
+          managers: [],
+          supervisors: [],
+          staff: []
+        }
+      });
+    });
+    
+    // Count employees per site
+    employees.forEach(emp => {
+      if (!emp.siteName) return;
+      
+      const siteName = emp.siteName;
+      if (!statusMap.has(siteName) && siteName !== "Not specified" && siteName !== "") {
+        // If site not in API, create entry with default requirements
+        statusMap.set(siteName, {
+          siteName,
+          managerCount: 0,
+          managerRequirement: 0,
+          supervisorCount: 0,
+          supervisorRequirement: 0,
+          staffCount: 0,
+          staffRequirement: 0,
+          totalStaff: 0,
+          isManagerFull: false,
+          isSupervisorFull: false,
+          isStaffFull: false,
+          remainingManagers: 0,
+          remainingSupervisors: 0,
+          remainingStaff: 0,
+          details: {
+            managers: [],
+            supervisors: [],
+            staff: []
+          }
+        });
+      }
+      
+      const siteStatus = statusMap.get(siteName);
+      if (!siteStatus) return;
+      
+      // Categorize by role
+      if (emp.isManager) {
+        siteStatus.managerCount++;
+        siteStatus.details.managers.push(emp);
+      } else if (emp.isSupervisor) {
+        siteStatus.supervisorCount++;
+        siteStatus.details.supervisors.push(emp);
+      } else {
+        siteStatus.staffCount++;
+        siteStatus.details.staff.push(emp);
+      }
+      
+      siteStatus.totalStaff++;
+      
+      // Calculate remaining and full status
+      siteStatus.remainingManagers = Math.max(0, siteStatus.managerRequirement - siteStatus.managerCount);
+      siteStatus.remainingSupervisors = Math.max(0, siteStatus.supervisorRequirement - siteStatus.supervisorCount);
+      siteStatus.remainingStaff = Math.max(0, siteStatus.staffRequirement - siteStatus.staffCount);
+      
+      siteStatus.isManagerFull = siteStatus.managerRequirement > 0 && siteStatus.managerCount >= siteStatus.managerRequirement;
+      siteStatus.isSupervisorFull = siteStatus.supervisorRequirement > 0 && siteStatus.supervisorCount >= siteStatus.supervisorRequirement;
+      siteStatus.isStaffFull = siteStatus.staffRequirement > 0 && siteStatus.staffCount >= siteStatus.staffRequirement;
+    });
+    
+    setSiteDeploymentStatus(statusMap);
+    setLoadingDeploymentStatus(false);
+  };
+
+  // Check if employees can be assigned to a site based on their roles
+  const canAssignToSite = (siteName: string, employeesToAssign: Employee[]): { 
+    allowed: boolean; 
+    message?: string;
+    violations: Array<{
+      employee: Employee;
+      reason: string;
+    }>;
+  } => {
+    const status = siteDeploymentStatus.get(siteName);
+    if (!status) {
+      // If site not in deployment status, allow assignment
+      return { allowed: true, violations: [] };
+    }
+    
+    const violations: Array<{ employee: Employee; reason: string }> = [];
+    
+    // Count how many of each role are being assigned
+    const managersToAdd = employeesToAssign.filter(emp => emp.isManager).length;
+    const supervisorsToAdd = employeesToAssign.filter(emp => emp.isSupervisor).length;
+    const staffToAdd = employeesToAssign.filter(emp => !emp.isManager && !emp.isSupervisor).length;
+    
+    // Check manager capacity
+    if (managersToAdd > status.remainingManagers) {
+      const overLimit = managersToAdd - status.remainingManagers;
+      employeesToAssign.filter(emp => emp.isManager).slice(0, overLimit).forEach(emp => {
+        violations.push({
+          employee: emp,
+          reason: `Manager position full for ${siteName}. Only ${status.remainingManagers} manager position(s) remaining.`
+        });
+      });
+    }
+    
+    // Check supervisor capacity
+    if (supervisorsToAdd > status.remainingSupervisors) {
+      const overLimit = supervisorsToAdd - status.remainingSupervisors;
+      employeesToAssign.filter(emp => emp.isSupervisor).slice(0, overLimit).forEach(emp => {
+        violations.push({
+          employee: emp,
+          reason: `Supervisor position full for ${siteName}. Only ${status.remainingSupervisors} supervisor position(s) remaining.`
+        });
+      });
+    }
+    
+    // Check staff capacity
+    if (staffToAdd > status.remainingStaff) {
+      const overLimit = staffToAdd - status.remainingStaff;
+      employeesToAssign.filter(emp => !emp.isManager && !emp.isSupervisor).slice(0, overLimit).forEach(emp => {
+        violations.push({
+          employee: emp,
+          reason: `Staff position full for ${siteName}. Only ${status.remainingStaff} staff position(s) remaining.`
+        });
+      });
+    }
+    
+    return {
+      allowed: violations.length === 0,
+      violations
+    };
+  };
+
+  // Get unique departments from employees
+  const departments = Array.from(new Set(employees.map(emp => emp.department))).filter(Boolean);
+
+  // Get unique site names from employees
+  const employeeSites = Array.from(new Set(employees.map(emp => emp.siteName))).filter(Boolean);
+
+  // Get site names from API
+  const apiSiteNames = sitesFromAPI.map(site => site.name).filter(Boolean);
+
+  // Combine both sources for the filter dropdown (remove duplicates)
+  const allSiteNames = Array.from(new Set([...employeeSites, ...apiSiteNames]));
+
+  // Filter employees based on search term and selected filters
   const filteredEmployees = employees.filter(emp => {
     const matchesSearch = 
       emp.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -271,7 +555,7 @@ const EmployeesTab = ({
     return matchesSearch && matchesDepartment && matchesSite && matchesJoinDate;
   });
 
-  // Sort employees based on selected criteria (client-side)
+  // Sort employees based on selected criteria
   const sortedEmployees = [...filteredEmployees].sort((a, b) => {
     if (sortBy === "name") {
       return (a.name || "").localeCompare(b.name || "");
@@ -288,15 +572,174 @@ const EmployeesTab = ({
     return 0;
   });
 
-  const paginatedEmployees = sortedEmployees.slice(
-    (employeesPage - 1) * employeesItemsPerPage,
-    employeesPage * employeesItemsPerPage
-  );
-
   // Statistics
   const activeEmployees = employees.filter(emp => emp.status === "active").length;
   const leftEmployeesCount = employees.filter(emp => emp.status === "left").length;
   const departmentsCount = new Set(employees.map(e => e.department)).size;
+
+  // Selection handlers
+  const handleSelectEmployee = (employeeId: string) => {
+    setSelectedEmployees(prev => {
+      if (prev.includes(employeeId)) {
+        return prev.filter(id => id !== employeeId);
+      } else {
+        return [...prev, employeeId];
+      }
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedEmployees([]);
+    } else {
+      setSelectedEmployees(sortedEmployees.map(emp => emp.id));
+    }
+    setSelectAll(!selectAll);
+  };
+
+  // Update selectAll state when selectedEmployees changes
+  useEffect(() => {
+    if (sortedEmployees.length > 0 && selectedEmployees.length === sortedEmployees.length) {
+      setSelectAll(true);
+    } else {
+      setSelectAll(false);
+    }
+  }, [selectedEmployees, sortedEmployees]);
+
+  // Bulk operations handlers
+  const handleBulkSiteAssignment = async () => {
+    if (!selectedSiteForBulk) {
+      toast.error("Please select a site");
+      return;
+    }
+
+    if (selectedEmployees.length === 0) {
+      toast.error("Please select at least one employee");
+      return;
+    }
+
+    // Get the selected employees data
+    const employeesToAssign = employees.filter(emp => selectedEmployees.includes(emp.id));
+    
+    // Check site capacity based on roles
+    const capacityCheck = canAssignToSite(selectedSiteForBulk, employeesToAssign);
+    
+    if (!capacityCheck.allowed) {
+      // Show detailed error message
+      toast.error(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-red-500" />
+            <span className="font-medium">Site Capacity Exceeded</span>
+          </div>
+          <div className="text-sm text-red-600 max-h-40 overflow-y-auto">
+            {capacityCheck.violations.map((violation, index) => (
+              <div key={index} className="mb-1">
+                • {violation.employee.name}: {violation.reason}
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-muted-foreground mt-2">
+            Please select different employees or adjust site requirements.
+          </div>
+        </div>,
+        { duration: 8000 }
+      );
+      return;
+    }
+
+    try {
+      setIsBulkUpdating(true);
+      
+      const response = await axios.patch(`${API_URL}/employees/bulk/site`, {
+        employeeIds: selectedEmployees,
+        siteName: selectedSiteForBulk
+      });
+
+      if (response.data.success) {
+        // Count by role for success message
+        const managersCount = employeesToAssign.filter(emp => emp.isManager).length;
+        const supervisorsCount = employeesToAssign.filter(emp => emp.isSupervisor).length;
+        const staffCount = employeesToAssign.filter(emp => !emp.isManager && !emp.isSupervisor).length;
+        
+        toast.success(
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-green-500" />
+              <span className="font-medium">Site Assignment Successful</span>
+            </div>
+            <div className="text-sm">
+              Assigned {selectedEmployees.length} employees to {selectedSiteForBulk}:
+              <div className="mt-1 text-xs">
+                {managersCount > 0 && <div>• Managers: {managersCount}</div>}
+                {supervisorsCount > 0 && <div>• Supervisors: {supervisorsCount}</div>}
+                {staffCount > 0 && <div>• Staff: {staffCount}</div>}
+              </div>
+            </div>
+          </div>
+        );
+        
+        setEmployees(prev => prev.map(emp => 
+          selectedEmployees.includes(emp.id) 
+            ? { ...emp, siteName: selectedSiteForBulk }
+            : emp
+        ));
+        
+        setBulkSiteDialogOpen(false);
+        setSelectedEmployees([]);
+        setSelectAll(false);
+        setSelectedSiteForBulk("");
+        
+        // Recalculate deployment status
+        calculateSiteDeploymentStatus();
+        fetchEmployees();
+      } else {
+        toast.error(response.data.message || "Failed to assign site");
+      }
+    } catch (err: any) {
+      console.error("Error assigning site:", err);
+      toast.error(err.response?.data?.message || "Error assigning site");
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedEmployees.length === 0) {
+      toast.error("Please select at least one employee");
+      return;
+    }
+
+    try {
+      setIsBulkDeleting(true);
+      
+      const response = await axios.delete(`${API_URL}/employees/bulk`, {
+        data: { employeeIds: selectedEmployees }
+      });
+
+      if (response.data.success) {
+        toast.success(`Successfully deleted ${selectedEmployees.length} employees`);
+        
+        setEmployees(prev => prev.filter(emp => !selectedEmployees.includes(emp.id)));
+        setTotalEmployees(prev => prev - selectedEmployees.length);
+        
+        setBulkDeleteDialogOpen(false);
+        setSelectedEmployees([]);
+        setSelectAll(false);
+        
+        // Recalculate deployment status
+        calculateSiteDeploymentStatus();
+        fetchEmployees();
+      } else {
+        toast.error(response.data.message || "Failed to delete employees");
+      }
+    } catch (err: any) {
+      console.error("Error deleting employees:", err);
+      toast.error(err.response?.data?.message || "Error deleting employees");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
 
   const handleDeleteEmployee = async (id: string) => {
     try {
@@ -307,14 +750,17 @@ const EmployeesTab = ({
         return;
       }
       
-      // Use MongoDB _id for deletion
       const employeeId = employee.id;
       
       const response = await axios.delete(`${API_URL}/employees/${employeeId}`);
       
       if (response.data.success) {
         setEmployees(prev => prev.filter(emp => emp.id !== id));
+        setTotalEmployees(prev => prev - 1);
         toast.success("Employee deleted successfully!");
+        
+        // Recalculate deployment status
+        calculateSiteDeploymentStatus();
       } else {
         toast.error(response.data.message || "Failed to delete employee");
       }
@@ -330,7 +776,7 @@ const EmployeesTab = ({
     try {
       setLoading(true);
       const response = await axios.patch(
-        `${API_URL}/employees/${employee.id}/status`, // Use MongoDB _id
+        `${API_URL}/employees/${employee.id}/status`,
         { status: "left" }
       );
       
@@ -341,6 +787,9 @@ const EmployeesTab = ({
             : emp
         ));
         toast.success("Employee marked as left");
+        
+        // Recalculate deployment status
+        calculateSiteDeploymentStatus();
       } else {
         toast.error(response.data.message || "Failed to update status");
       }
@@ -373,7 +822,6 @@ const EmployeesTab = ({
         }
       });
       
-      // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement("a");
       link.href = url;
@@ -398,31 +846,554 @@ const EmployeesTab = ({
   const handleImportEmployees = async (file: File) => {
     try {
       setIsImporting(true);
-      const formData = new FormData();
-      formData.append("file", file);
+      setImportProgress({ current: 0, total: 0 });
       
-      const response = await axios.post(`${API_URL}/employees/import`, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
+      if (!file) {
+        toast.error("Please select a file to import");
+        return;
+      }
+
+      const toastId = toast.loading(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4" />
+            <span className="font-medium">Reading Excel file...</span>
+          </div>
+        </div>
+      );
+
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { 
+        type: 'array',
+        cellDates: true,
+        cellNF: false
       });
       
-      if (response.data.success) {
-        toast.success("Employees imported successfully!");
-        await fetchEmployees(); // Refresh the list
-        setImportDialogOpen(false);
-      } else {
-        toast.error(response.data.message || "Import failed");
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+        header: 1, 
+        defval: '',
+        raw: false,
+        dateNF: 'mm/dd/yyyy'
+      });
+      
+      const headers = jsonData[0] as string[];
+      
+      const siteIndex = 0;
+      const nameIndex = 1;
+      const dobIndex = 3;
+      const dojIndex = 4;
+      const contactIndex = 6;
+      const bloodGroupIndex = 7;
+      const emailIndex = 8;
+      const aadharIndex = 9;
+      const panIndex = 10;
+      const positionIndex = 36;
+      const salaryIndex = 37;
+      const departmentIndex = 35;
+      const accountNumberIndex = 18;
+      const ifscIndex = 19;
+      const bankNameIndex = 17;
+      const fatherNameIndex = 20;
+      const motherNameIndex = 21;
+      const spouseNameIndex = 22;
+      const emergencyContactNameIndex = 23;
+      const emergencyContactPhoneIndex = 24;
+      const permanentAddressIndex = 13;
+      
+      const employeesToImport = [];
+      let processedCount = 0;
+      let skippedCount = 0;
+      const skippedReasons: string[] = [];
+      
+      for (let i = 1; i < jsonData.length; i++) {
+        const row = jsonData[i] as any[];
+        if (!row || row.length === 0) continue;
+        
+        const siteName = row[siteIndex] ? String(row[siteIndex]).trim() : '';
+        const name = row[nameIndex] ? String(row[nameIndex]).trim() : '';
+        const aadhar = row[aadharIndex] ? String(row[aadharIndex]).trim().replace(/\s/g, '') : '';
+        
+        const dobRaw = row[dobIndex];
+        const dojRaw = row[dojIndex];
+        
+        const contact = row[contactIndex] ? String(row[contactIndex]).trim() : '';
+        const bloodGroup = row[bloodGroupIndex] ? String(row[bloodGroupIndex]).trim() : '';
+        const email = row[emailIndex] ? String(row[emailIndex]).trim() : '';
+        const pan = row[panIndex] ? String(row[panIndex]).trim().toUpperCase() : '';
+        const position = row[positionIndex] ? String(row[positionIndex]).trim() : '';
+        const salaryStr = row[salaryIndex] ? String(row[salaryIndex]).trim() : '';
+        const department = row[departmentIndex] ? String(row[departmentIndex]).trim() : '';
+        const accountNumber = row[accountNumberIndex] ? String(row[accountNumberIndex]).trim() : '';
+        const ifscCode = row[ifscIndex] ? String(row[ifscIndex]).trim().toUpperCase() : '';
+        const bankName = row[bankNameIndex] ? String(row[bankNameIndex]).trim() : '';
+        const fatherName = row[fatherNameIndex] ? String(row[fatherNameIndex]).trim() : '';
+        const motherName = row[motherNameIndex] ? String(row[motherNameIndex]).trim() : '';
+        const spouseName = row[spouseNameIndex] ? String(row[spouseNameIndex]).trim() : '';
+        const emergencyContactName = row[emergencyContactNameIndex] ? String(row[emergencyContactNameIndex]).trim() : '';
+        const emergencyContactPhone = row[emergencyContactPhoneIndex] ? String(row[emergencyContactPhoneIndex]).trim() : '';
+        const permanentAddress = row[permanentAddressIndex] ? String(row[permanentAddressIndex]).trim() : '';
+        
+        if (!name || !aadhar) {
+          skippedCount++;
+          skippedReasons.push(`Row ${i}: Missing name or aadhar`);
+          continue;
+        }
+        
+        if (!/^\d{12}$/.test(aadhar)) {
+          skippedCount++;
+          skippedReasons.push(`Row ${i}: Invalid Aadhar format (${aadhar.length} digits)`);
+          continue;
+        }
+        
+        let dateOfBirth: Date | null = null;
+        let dateOfJoining: Date = new Date();
+        
+        if (dojRaw !== undefined && dojRaw !== null && dojRaw !== '') {
+          try {
+            if (dojRaw instanceof Date) {
+              dateOfJoining = dojRaw;
+            } else if (typeof dojRaw === 'number') {
+              dateOfJoining = excelSerialToDate(dojRaw);
+            } else if (typeof dojRaw === 'string') {
+              const parsed = parseDateString(dojRaw);
+              if (parsed) {
+                dateOfJoining = parsed;
+              } else {
+                const testDate = new Date(dojRaw);
+                if (!isNaN(testDate.getTime())) {
+                  dateOfJoining = testDate;
+                }
+              }
+            }
+            
+            if (isNaN(dateOfJoining.getTime())) {
+              dateOfJoining = new Date();
+            }
+          } catch (error) {
+            dateOfJoining = new Date();
+          }
+        }
+        
+        if (dobRaw !== undefined && dobRaw !== null && dobRaw !== '') {
+          try {
+            if (dobRaw instanceof Date) {
+              dateOfBirth = dobRaw;
+            } else if (typeof dobRaw === 'number') {
+              dateOfBirth = excelSerialToDate(dobRaw);
+            } else if (typeof dobRaw === 'string') {
+              const parsed = parseDateString(dobRaw);
+              if (parsed) dateOfBirth = parsed;
+            }
+          } catch (error) {
+            console.warn(`Row ${i}: Error parsing DOB:`, error);
+          }
+        }
+        
+        const positionToDepartmentMap: Record<string, string> = {
+          'ACCOUNTANT': 'Finance',
+          'OWC OPERATOR': 'Operations',
+          'Security Guard': 'Security',
+          'HK STAFF': 'Housekeeping',
+          'HK Supervisor': 'Housekeeping',
+          'Supervisor': 'Supervisor',
+          'Driver': 'Driver',
+          'DRIVER': 'Driver',
+          'Parking Attendent': 'Parking Management',
+          'GATE ATTENDANT': 'Security',
+          'PARKING': 'Parking Management',
+          'MANAGER': 'Administration',
+          'RECEPTIONIST': 'Administration',
+          'Bouncer': 'Security',
+          'Security SUP': 'Security',
+          'Manager': 'Administration',
+          'OFFICE STAFF': 'Administration',
+          'Admin': 'Administration',
+          'HR': 'HR',
+          'ACCOUNDEND': 'Finance',
+          'OWC Opreter': 'Operations',
+          'HK SUPERVISOR': 'Housekeeping',
+          'CLEANER': 'Housekeeping',
+          'HOUSEKEEPING': 'Housekeeping',
+          'SECURITY': 'Security',
+          'MAINTENANCE': 'Maintenance',
+          'IT STAFF': 'IT',
+          'SALES': 'Sales'
+        };
+        
+        let finalDepartment = department || 'General Staff';
+        if (position) {
+          const posUpper = position.toUpperCase();
+          if (positionToDepartmentMap[posUpper]) {
+            finalDepartment = positionToDepartmentMap[posUpper];
+          }
+        }
+        
+        let finalEmail = email;
+        if (!email && name) {
+          const nameParts = name.toLowerCase().split(' ');
+          const firstName = nameParts[0]?.replace(/[^a-z]/g, '') || 'employee';
+          const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1].replace(/[^a-z]/g, '') : '';
+          const randomNum = Math.floor(100 + Math.random() * 900);
+          finalEmail = `${firstName}${lastName ? '.' + lastName : ''}${randomNum}@skenterprises.com`.toLowerCase();
+        }
+        
+        let finalPhone = contact;
+        if (finalPhone) {
+          const digits = finalPhone.replace(/\D/g, '');
+          if (digits.length === 10) {
+            finalPhone = digits;
+          } else if (digits.length > 10) {
+            finalPhone = digits.slice(-10);
+          } else {
+            finalPhone = '98' + Math.floor(10000000 + Math.random() * 90000000).toString();
+          }
+        } else {
+          finalPhone = '98' + Math.floor(10000000 + Math.random() * 90000000).toString();
+        }
+        
+        let salary = 15000;
+        if (salaryStr) {
+          const cleaned = salaryStr.replace(/[^0-9.]/g, '');
+          const parsed = parseFloat(cleaned);
+          if (!isNaN(parsed) && parsed > 0) {
+            salary = parsed;
+          }
+        }
+        
+        let finalBloodGroup = null;
+        if (bloodGroup) {
+          const validBloodGroups = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
+          const bgUpper = bloodGroup.trim().toUpperCase();
+          if (validBloodGroups.includes(bgUpper)) {
+            finalBloodGroup = bgUpper;
+          }
+        }
+        
+        const employeeData = {
+          name: name,
+          email: finalEmail,
+          phone: finalPhone,
+          aadharNumber: aadhar,
+          dateOfJoining: dateOfJoining,
+          department: finalDepartment,
+          position: position || 'Employee',
+          salary: salary,
+          status: 'active',
+          role: 'employee',
+          
+          siteName: siteName || 'Main Office',
+          
+          dateOfBirth: dateOfBirth,
+          bloodGroup: finalBloodGroup,
+          panNumber: pan || null,
+          gender: null,
+          maritalStatus: null,
+          
+          bankName: bankName || null,
+          accountNumber: accountNumber || null,
+          ifscCode: ifscCode || null,
+          branchName: null,
+          bankBranch: null,
+          
+          permanentAddress: permanentAddress || null,
+          permanentPincode: null,
+          localAddress: null,
+          localPincode: null,
+          
+          fatherName: fatherName || null,
+          motherName: motherName || null,
+          spouseName: spouseName || null,
+          numberOfChildren: 0,
+          
+          emergencyContactName: emergencyContactName || null,
+          emergencyContactPhone: emergencyContactPhone || null,
+          emergencyContactRelation: null,
+          
+          nomineeName: null,
+          nomineeRelation: null,
+          
+          esicNumber: null,
+          uanNumber: null,
+          dateOfExit: null,
+          pantSize: null,
+          shirtSize: null,
+          capSize: null,
+          idCardIssued: false,
+          westcoatIssued: false,
+          apronIssued: false,
+          photo: null,
+          photoPublicId: null,
+          employeeSignature: null,
+          employeeSignaturePublicId: null,
+          authorizedSignature: null,
+          authorizedSignaturePublicId: null
+        };
+        
+        employeesToImport.push(employeeData);
+        processedCount++;
+        
+        setImportProgress({ current: i, total: jsonData.length - 1 });
+        
+        if (i % 50 === 0) {
+          console.log(`Processed ${i}/${jsonData.length - 1} rows...`);
+        }
       }
-    } catch (err: any) {
-      console.error("Error importing employees:", err);
-      if (err.response?.status === 404) {
-        toast.error("Import endpoint not found. Please configure backend.");
-      } else {
-        toast.error(err.response?.data?.message || "Import failed");
+      
+      if (employeesToImport.length === 0) {
+        toast.error(
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <XCircle className="h-4 w-4 text-red-500" />
+              <span className="font-medium">No valid employees found</span>
+            </div>
+            <div className="text-sm text-red-600">
+              Skipped {skippedCount} rows. Please check your Excel data.
+            </div>
+          </div>,
+          { id: toastId, duration: 10000 }
+        );
+        return;
       }
+      
+      toast.loading(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-4 w-4" />
+            <span className="font-medium">Importing {employeesToImport.length} employees...</span>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            This may take a few moments...
+          </div>
+        </div>,
+        { id: toastId }
+      );
+      
+      let successCount = 0;
+      let duplicateCount = 0;
+      let errorCount = 0;
+      const errorMessages: string[] = [];
+      
+      const batchSize = 20;
+      for (let batchStart = 0; batchStart < employeesToImport.length; batchStart += batchSize) {
+        const batch = employeesToImport.slice(batchStart, batchStart + batchSize);
+        
+        for (let i = 0; i < batch.length; i++) {
+          const employee = batch[i];
+          const globalIndex = batchStart + i + 1;
+          
+          try {
+            const response = await axios.post(`${API_URL}/employees`, employee, {
+              timeout: 15000
+            });
+            
+            if (response.data.success) {
+              successCount++;
+            } else {
+              errorCount++;
+              const errorMsg = response.data.message || 'Unknown error';
+              errorMessages.push(`${employee.name}: ${errorMsg}`);
+              
+              if (errorMsg.includes('already exists') || errorMsg.includes('duplicate')) {
+                duplicateCount++;
+              }
+            }
+          } catch (error: any) {
+            errorCount++;
+            const errorMsg = error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error';
+            errorMessages.push(`${employee.name}: ${errorMsg}`);
+            
+            if (errorMsg.includes('already exists') || errorMsg.includes('duplicate')) {
+              duplicateCount++;
+            }
+          }
+          
+          setImportProgress({ 
+            current: batchStart + i + 1, 
+            total: employeesToImport.length 
+          });
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      const actualNewImports = successCount;
+      
+      let resultMessage = '';
+      if (actualNewImports > 0) {
+        resultMessage = `✅ ${actualNewImports} employees imported successfully`;
+        if (duplicateCount > 0) {
+          resultMessage += `, ⚠️ ${duplicateCount} already existed (skipped)`;
+        }
+        if (errorCount > duplicateCount) {
+          const otherErrors = errorCount - duplicateCount;
+          resultMessage += `, ❌ ${otherErrors} failed`;
+        }
+      } else {
+        resultMessage = `❌ No new employees imported. ${duplicateCount} already exist, ${errorCount - duplicateCount} failed.`;
+      }
+      
+      toast.success(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-green-500" />
+            <span className="font-medium">Import Complete</span>
+          </div>
+          <div className="text-sm">
+            {resultMessage}
+          </div>
+          {skippedCount > 0 && (
+            <div className="text-xs text-muted-foreground">
+              {skippedCount} rows were skipped due to invalid data
+            </div>
+          )}
+          {errorMessages.length > 0 && errorMessages.length <= 10 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground">
+                View error details ({errorMessages.length})
+              </summary>
+              <div className="mt-2 p-2 bg-red-50 rounded max-h-32 overflow-y-auto">
+                {errorMessages.map((msg, idx) => (
+                  <div key={idx} className="text-red-600 truncate">{msg}</div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>,
+        { id: toastId, duration: 10000 }
+      );
+      
+      setTimeout(() => {
+        fetchEmployees();
+        calculateSiteDeploymentStatus();
+      }, 2000);
+      
+      setImportDialogOpen(false);
+      
+    } catch (error: any) {
+      console.error("Import process failed:", error);
+      toast.error(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <XCircle className="h-4 w-4 text-red-500" />
+            <span className="font-medium">Import Failed</span>
+          </div>
+          <div className="text-sm text-red-600">
+            {error.message || "Error processing the file"}
+          </div>
+        </div>
+      );
     } finally {
       setIsImporting(false);
+      setImportProgress({ current: 0, total: 0 });
+    }
+  };
+
+  const excelSerialToDate = (serial: number): Date => {
+    try {
+      const adjustedSerial = serial > 60 ? serial - 1 : serial;
+      const utcDays = Math.floor(adjustedSerial - 25569);
+      const utcValue = utcDays * 86400 * 1000;
+      const date = new Date(utcValue);
+      
+      if (serial % 1 !== 0) {
+        const fraction = serial % 1;
+        const hours = Math.floor(fraction * 24);
+        const minutes = Math.floor((fraction * 24 * 60) % 60);
+        const seconds = Math.floor((fraction * 24 * 60 * 60) % 60);
+        date.setHours(hours, minutes, seconds);
+      }
+      
+      return date;
+    } catch (error) {
+      console.error('Error converting Excel date:', serial, error);
+      return new Date();
+    }
+  };
+
+  const parseDateString = (dateStr: string): Date | null => {
+    if (!dateStr || typeof dateStr !== 'string') return null;
+    
+    try {
+      const cleanStr = dateStr.trim();
+      
+      const usFormat = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+      const usMatch = cleanStr.match(usFormat);
+      if (usMatch) {
+        const month = parseInt(usMatch[1]) - 1;
+        const day = parseInt(usMatch[2]);
+        const year = parseInt(usMatch[3]);
+        const date = new Date(year, month, day);
+        if (!isNaN(date.getTime())) {
+          return date;
+        }
+      }
+      
+      const euFormat = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+      const euMatch = cleanStr.match(euFormat);
+      if (euMatch) {
+        const day = parseInt(euMatch[1]);
+        const month = parseInt(euMatch[2]) - 1;
+        const year = parseInt(euMatch[3]);
+        const date = new Date(year, month, day);
+        if (!isNaN(date.getTime())) {
+          return date;
+        }
+      }
+      
+      const isoFormat = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+      const isoMatch = cleanStr.match(isoFormat);
+      if (isoMatch) {
+        const year = parseInt(isoMatch[1]);
+        const month = parseInt(isoMatch[2]) - 1;
+        const day = parseInt(isoMatch[3]);
+        const date = new Date(year, month, day);
+        if (!isNaN(date.getTime())) {
+          return date;
+        }
+      }
+      
+      const date = new Date(cleanStr);
+      if (!isNaN(date.getTime())) {
+        return date;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error parsing date string:', dateStr, error);
+      return null;
+    }
+  };
+
+  const parseExcelDate = (dateStr: string): Date | null => {
+    if (!dateStr) return null;
+    
+    try {
+      if (dateStr.includes('/') || dateStr.includes('-')) {
+        const parts = dateStr.split(/[/-]/);
+        if (parts.length === 3) {
+          const day = parseInt(parts[0]);
+          const month = parseInt(parts[1]) - 1;
+          const year = parseInt(parts[2]);
+          const fullYear = year < 100 ? 2000 + year : year;
+          const date = new Date(fullYear, month, day);
+          if (!isNaN(date.getTime())) {
+            return date;
+          }
+        }
+      }
+      
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        return date;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error parsing date:', dateStr, error);
+      return null;
     }
   };
 
@@ -446,7 +1417,6 @@ const EmployeesTab = ({
   const handleOpenEPFForm11 = (employee: Employee) => {
     setSelectedEmployeeForEPF(employee);
     
-    // Pre-fill form data with employee information
     setEpfFormData({
       memberName: employee.name || "",
       fatherOrSpouseName: employee.fatherName || employee.spouseName || "",
@@ -771,10 +1741,9 @@ const EmployeesTab = ({
                   <div class="value">${epfFormData.previousPFAccountNumber}</div>
                 </div>
               </div>
-
               <div class="field-row">
                 <div class="field-group half-width">
-                  <div class="label">c) Date of Exit from previous Employment ? (dd/mm/yyyy)</div>
+                  <div class="label">c) Date of Exit from previous Employment</div>
                   <div class="value">${epfFormData.dateOfExit}</div>
                 </div>
                 <div class="field-group half-width">
@@ -782,7 +1751,6 @@ const EmployeesTab = ({
                   <div class="value">${epfFormData.schemeCertificateNumber}</div>
                 </div>
               </div>
-
               <div class="field-row">
                 <div class="field-group half-width">
                   <div class="label">e) Pension Payment Order (PPO) (If issued)</div>
@@ -990,39 +1958,30 @@ const EmployeesTab = ({
     printWindow.document.close();
   };
 
-  // Helper function to get photo URL with fallback
   const getPhotoUrl = (employee: Employee): string => {
     if (!employee.photo) {
       return "";
     }
     
-    // If it's already a full URL (Cloudinary or other)
     if (typeof employee.photo === 'string') {
-      // Check if it's a Cloudinary URL
       if (employee.photo.includes('cloudinary.com')) {
-        // Add transformations for thumbnail display
         return employee.photo.replace('/image/upload/', '/image/upload/w_200,h_200,c_fill,q_auto/');
       }
       
-      // Check if it's a local uploads path (like '/uploads/photo-12345.png')
       if (employee.photo.startsWith('/uploads/')) {
-        // Add your backend server URL
         return `http://localhost:5001${employee.photo}`;
       }
       
-      // Check if it's a base64 data URL
       if (employee.photo.startsWith('data:image')) {
         return employee.photo;
       }
       
-      // Return as-is for other cases
       return employee.photo;
     }
     
     return "";
   };
 
-  // Form generation functions
   const generateIDCard = (employee: Employee) => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
@@ -1030,7 +1989,6 @@ const EmployeesTab = ({
       return;
     }
 
-    // Get photo URL - if it's a Cloudinary URL, use it directly
     const photoUrl = getPhotoUrl(employee);
     
     printWindow.document.write(`
@@ -1473,6 +2431,42 @@ const EmployeesTab = ({
 
   return (
     <div className="space-y-6">
+      {/* Import Progress Indicator */}
+      {isImporting && importProgress.total > 0 && (
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Database className="h-5 w-5 text-primary" />
+                  <div>
+                    <h4 className="font-semibold">Importing to Database</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Saving employees to backend database...
+                    </p>
+                  </div>
+                </div>
+                <Badge variant="secondary">
+                  {importProgress.current}/{importProgress.total}
+                </Badge>
+              </div>
+              <div className="space-y-1">
+                <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Progress</span>
+                  <span>{Math.round((importProgress.current / importProgress.total) * 100)}%</span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Loading overlay */}
       {loading && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -1527,6 +2521,24 @@ const EmployeesTab = ({
           <div className="flex gap-2">
             <Button 
               variant="outline" 
+              onClick={() => setBulkSiteDialogOpen(true)}
+              disabled={selectedEmployees.length === 0}
+              className={selectedEmployees.length > 0 ? "border-blue-500 text-blue-600" : ""}
+            >
+              <Users className="mr-2 h-4 w-4" />
+              Assign Site {selectedEmployees.length > 0 && `(${selectedEmployees.length})`}
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => setBulkDeleteDialogOpen(true)}
+              disabled={selectedEmployees.length === 0}
+              className={selectedEmployees.length > 0 ? "border-red-500 text-red-600 hover:bg-red-50" : ""}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Bulk Delete {selectedEmployees.length > 0 && `(${selectedEmployees.length})`}
+            </Button>
+            <Button 
+              variant="outline" 
               onClick={() => setImportDialogOpen(true)}
               className="flex-1 sm:flex-none"
               disabled={isImporting}
@@ -1534,7 +2546,7 @@ const EmployeesTab = ({
               {isImporting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <Sheet className="mr-2 h-4 w-4" />
+                <Upload className="mr-2 h-4 w-4" />
               )}
               {isImporting ? "Importing..." : "Import Excel"}
             </Button>
@@ -1579,7 +2591,7 @@ const EmployeesTab = ({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Sites</SelectItem>
-            {sites.map(site => (
+            {allSiteNames.map(site => (
               <SelectItem key={site} value={site}>{site}</SelectItem>
             ))}
           </SelectContent>
@@ -1608,7 +2620,7 @@ const EmployeesTab = ({
         loading={isImporting}
       />
 
-      {/* EPF Form 11 Dialog - Updated to match OnboardingTab */}
+      {/* EPF Form 11 Dialog */}
       <Dialog open={epfForm11DialogOpen} onOpenChange={setEpfForm11DialogOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -1635,7 +2647,7 @@ const EmployeesTab = ({
               <div className="flex items-center">
                 <div className="flex-shrink-0">
                   <svg className="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 a1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -2240,7 +3252,7 @@ const EmployeesTab = ({
               <div className="section-title">DECLARATION BY PRESENT EMPLOYER</div>
               
               <div className="space-y-2">
-                <Label>A. The member Mr./Ms./Mrs. {epfFormData.memberName} has joined on {epfFormData.enrolledDate} and has been allotted PF Number {selectedEmployeeForEPF?.uan || epfFormData.pfNumber || "Pending"}</Label>
+                <Label>A. The member Mr./Ms./Mrs. {epfFormData.memberName} has joined on {epfFormData.enrolledDate} and has been allotted PF Number ${selectedEmployeeForEPF?.uan || epfFormData.pfNumber || "Pending"}</Label>
               </div>
 
               <div className="space-y-2">
@@ -2335,9 +3347,9 @@ const EmployeesTab = ({
       </Dialog>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard title="Total Employees" value={employees.length} />
+        <StatCard title="Total Employees" value={totalEmployees} />
         <StatCard 
-          title="Active Employees" 
+          title="Active Employees/Page" 
           value={activeEmployees} 
           className="text-green-600" 
         />
@@ -2346,6 +3358,29 @@ const EmployeesTab = ({
           value={leftEmployeesCount} 
           className="text-red-600" 
         />
+      </div>
+
+      {/* Selection Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="selectAll"
+              checked={selectAll}
+              onChange={handleSelectAll}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            <Label htmlFor="selectAll" className="text-sm font-medium cursor-pointer">
+              Select All ({sortedEmployees.length})
+            </Label>
+          </div>
+          {selectedEmployees.length > 0 && (
+            <Badge variant="secondary">
+              {selectedEmployees.length} employee{selectedEmployees.length !== 1 ? 's' : ''} selected
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Documents Dialog */}
@@ -2498,7 +3533,7 @@ const EmployeesTab = ({
               </div>
 
               {/* Employee Photo */}
-              {selectedEmployeeForDocuments.photo && (
+              {(selectedEmployeeForDocuments.photo || selectedEmployeeForDocuments.photoPublicId) && (
                 <div>
                   <h4 className="font-semibold text-lg mb-4">Employee Photo</h4>
                   <div className="border rounded-lg p-4 text-center">
@@ -2544,11 +3579,18 @@ const EmployeesTab = ({
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {paginatedEmployees.map((employee) => (
+            {sortedEmployees.map((employee) => (
               <div key={employee.id} className="border rounded-lg p-4">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    {employee.photo ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedEmployees.includes(employee.id)}
+                      onChange={() => handleSelectEmployee(employee.id)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    
+                    {employee.photo || employee.photoPublicId ? (
                       <img 
                         src={getPhotoUrl(employee)} 
                         alt={employee.name}
@@ -2563,10 +3605,16 @@ const EmployeesTab = ({
                       </div>
                     )}
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-semibold">{employee.name}</h4>
                         {employee.status === "left" && (
                           <Badge variant="destructive">Left</Badge>
+                        )}
+                        {employee.isManager && (
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-200">Manager</Badge>
+                        )}
+                        {employee.isSupervisor && (
+                          <Badge className="bg-teal-100 text-teal-800 border-teal-200">Supervisor</Badge>
                         )}
                       </div>
                       <p className="text-sm text-muted-foreground">{employee.employeeId} • {employee.department}</p>
@@ -2574,7 +3622,7 @@ const EmployeesTab = ({
                       <p className="text-sm text-muted-foreground">Site: {employee.siteName || "Not specified"}</p>
                       <p className="text-sm text-muted-foreground">Join Date: {employee.joinDate}</p>
                       <p className="text-sm text-muted-foreground">Salary: ₹{employee.salary.toLocaleString()}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <Badge variant="outline" className="text-xs">
                           Documents: {employee.documents?.length || 0}
                         </Badge>
@@ -2587,8 +3635,11 @@ const EmployeesTab = ({
                         {employee.esicNumber && (
                           <Badge variant="secondary" className="text-xs">ESIC</Badge>
                         )}
-                        {employee.photo && (
-                          <Badge variant="secondary" className="text-xs">Photo</Badge>
+                        {(employee.photo || employee.photoPublicId) && (
+                          <Badge variant="secondary" className="text-xs">
+                            <Camera className="h-3 w-3 mr-1" />
+                            Photo
+                          </Badge>
                         )}
                       </div>
                     </div>
@@ -2636,7 +3687,7 @@ const EmployeesTab = ({
                               </Badge>
                             </div>
                           </div>
-                          {employee.photo && (
+                          {(employee.photo || employee.photoPublicId) && (
                             <div>
                               <strong>Employee Photo:</strong>
                               <div className="mt-2">
@@ -2744,8 +3795,8 @@ const EmployeesTab = ({
             {sortedEmployees.length > 0 && (
               <Pagination
                 currentPage={employeesPage}
-                totalPages={Math.ceil(sortedEmployees.length / employeesItemsPerPage)}
-                totalItems={sortedEmployees.length}
+                totalPages={Math.ceil(totalEmployees / employeesItemsPerPage)} 
+                totalItems={totalEmployees} 
                 itemsPerPage={employeesItemsPerPage}
                 onPageChange={setEmployeesPage}
                 onItemsPerPageChange={setEmployeesItemsPerPage}
@@ -2754,6 +3805,212 @@ const EmployeesTab = ({
           </div>
         </CardContent>
       </Card>
+
+      {/* Bulk Site Assignment Dialog */}
+      <Dialog open={bulkSiteDialogOpen} onOpenChange={setBulkSiteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Assign Site to Multiple Employees
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Selected Employees</Label>
+              <div className="max-h-32 overflow-y-auto border rounded-lg p-2">
+                {employees
+                  .filter(emp => selectedEmployees.includes(emp.id))
+                  .map(emp => (
+                    <div key={emp.id} className="text-sm py-1 flex items-center justify-between">
+                      <span>
+                        {emp.name} ({emp.employeeId})
+                      </span>
+                      {emp.isManager ? (
+                        <Badge className="bg-amber-100 text-amber-800 text-xs">Manager</Badge>
+                      ) : emp.isSupervisor ? (
+                        <Badge className="bg-teal-100 text-teal-800 text-xs">Supervisor</Badge>
+                      ) : (
+                        <Badge className="bg-cyan-100 text-cyan-800 text-xs">Staff</Badge>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="siteSelect">Select Site</Label>
+              <Select value={selectedSiteForBulk} onValueChange={setSelectedSiteForBulk}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a site" />
+                </SelectTrigger>
+                <SelectContent>
+                  {loadingSites ? (
+                    <div className="flex items-center justify-center p-4">
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      <span>Loading sites...</span>
+                    </div>
+                  ) : (
+                    <>
+                      {Array.from(siteDeploymentStatus.values()).map(status => (
+                        <SelectItem key={status.siteName} value={status.siteName}>
+                          <div className="flex flex-col items-start">
+                            <span>{status.siteName}</span>
+                            <span className="text-xs text-muted-foreground">
+                              Managers: {status.managerCount}/{status.managerRequirement} | 
+                              Supervisors: {status.supervisorCount}/{status.supervisorRequirement} | 
+                              Staff: {status.staffCount}/{status.staffRequirement}
+                              {status.isStaffFull && " (Staff Full)"}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                      {allSiteNames.length === 0 && (
+                        <div className="p-4 text-center text-muted-foreground">
+                          No sites available
+                        </div>
+                      )}
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+              {allSiteNames.length === 0 && !loadingSites && (
+                <p className="text-xs text-amber-600 mt-1">
+                  No sites found. Please add sites in the Sites page or import employees with sites.
+                </p>
+              )}
+            </div>
+
+            {/* Site Capacity Info */}
+            {selectedSiteForBulk && siteDeploymentStatus.has(selectedSiteForBulk) && (
+              <div className="p-4 border rounded-lg bg-gray-50">
+                <h4 className="font-semibold text-sm mb-2">Site Capacity Info - {selectedSiteForBulk}</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="flex items-center gap-1">
+                      <Shield className="h-3 w-3" />
+                      Managers:
+                    </span>
+                    <span className={siteDeploymentStatus.get(selectedSiteForBulk)?.isManagerFull ? 'text-red-600 font-bold' : 'text-green-600'}>
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.managerCount} / {siteDeploymentStatus.get(selectedSiteForBulk)?.managerRequirement}
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.remainingManagers > 0 && 
+                        ` (${siteDeploymentStatus.get(selectedSiteForBulk)?.remainingManagers} left)`
+                      }
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="flex items-center gap-1">
+                      <ShieldCheck className="h-3 w-3" />
+                      Supervisors:
+                    </span>
+                    <span className={siteDeploymentStatus.get(selectedSiteForBulk)?.isSupervisorFull ? 'text-red-600 font-bold' : 'text-green-600'}>
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.supervisorCount} / {siteDeploymentStatus.get(selectedSiteForBulk)?.supervisorRequirement}
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.remainingSupervisors > 0 && 
+                        ` (${siteDeploymentStatus.get(selectedSiteForBulk)?.remainingSupervisors} left)`
+                      }
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="flex items-center gap-1">
+                      <Users className="h-3 w-3" />
+                      Staff:
+                    </span>
+                    <span className={siteDeploymentStatus.get(selectedSiteForBulk)?.isStaffFull ? 'text-red-600 font-bold' : 'text-green-600'}>
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.staffCount} / {siteDeploymentStatus.get(selectedSiteForBulk)?.staffRequirement}
+                      {siteDeploymentStatus.get(selectedSiteForBulk)?.remainingStaff > 0 && 
+                        ` (${siteDeploymentStatus.get(selectedSiteForBulk)?.remainingStaff} left)`
+                      }
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button variant="outline" onClick={() => setBulkSiteDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleBulkSiteAssignment}
+                disabled={isBulkUpdating || !selectedSiteForBulk || allSiteNames.length === 0}
+              >
+                {isBulkUpdating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Assigning...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Assign Site
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Confirm Bulk Deletion
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <p className="text-sm text-red-800">
+                You are about to delete <strong>{selectedEmployees.length} employee{selectedEmployees.length !== 1 ? 's' : ''}</strong>. 
+                This action cannot be undone.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Employees to be deleted:</Label>
+              <div className="max-h-48 overflow-y-auto border rounded-lg p-2">
+                {employees
+                  .filter(emp => selectedEmployees.includes(emp.id))
+                  .map(emp => (
+                    <div key={emp.id} className="text-sm py-1 flex items-center gap-2">
+                      <XCircle className="h-3 w-3 text-red-500" />
+                      {emp.name} ({emp.employeeId}) - {emp.department}
+                      {emp.isManager && " (Manager)"}
+                      {emp.isSupervisor && " (Supervisor)"}
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button variant="outline" onClick={() => setBulkDeleteDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button 
+                variant="destructive"
+                onClick={handleBulkDelete}
+                disabled={isBulkDeleting}
+              >
+                {isBulkDeleting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete {selectedEmployees.length} Employee{selectedEmployees.length !== 1 ? 's' : ''}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

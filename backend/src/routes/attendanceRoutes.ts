@@ -10,7 +10,8 @@ import {
   getAllAttendance,
   updateAttendance,
   getWeeklySummary,
-  manualAttendance
+  manualAttendance,
+  updateAttendanceStatus // Add this import
 } from '../controllers/attendanceController';
 
 const router = express.Router();
@@ -29,6 +30,9 @@ router.get('/', getAllAttendance);
 
 // Update attendance (admin/supervisor)
 router.put('/:id', updateAttendance);
+
+// NEW: Update attendance status (admin/supervisor)
+router.post('/update-status', updateAttendanceStatus);
 
 // Manual attendance entry
 router.post('/manual', manualAttendance);

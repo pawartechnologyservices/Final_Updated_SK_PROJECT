@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IHourlyUpdate {
   id: string;
@@ -16,25 +16,44 @@ export interface IAttachment {
   type: string;
 }
 
-export interface ITask extends Document {
+export interface IAssignedUser {
+  userId: string;
+  name: string;
+  role: 'manager' | 'supervisor' | 'employee';
+  assignedAt: Date;
+  status: 'pending' | 'in-progress' | 'completed' | 'cancelled'; // Individual status
+}
+
+// Define methods interface
+export interface ITaskMethods {
+  isUserAssigned(userId: string): boolean;
+  getUserStatus(userId: string): string | null;
+  updateUserStatus(userId: string, newStatus: string): boolean;
+  updateOverallStatus(): void;
+}
+
+// Combine with Document
+export interface ITask extends Document, ITaskMethods {
   title: string;
   description: string;
-  assignedTo: string; // User ID
-  assignedToName: string; // User name for easy reference
+  assignedUsers: IAssignedUser[];
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   deadline: Date;
   dueDateTime: Date;
-  siteId: string; // Reference to Site
-  siteName: string; // For easy reference
-  clientName: string; // For easy reference
+  siteId: string;
+  siteName: string;
+  clientName: string;
   taskType?: string;
   attachments: IAttachment[];
   hourlyUpdates: IHourlyUpdate[];
-  createdBy: string; // User ID who created the task
+  createdBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
+
+// Define the model type
+export interface ITaskModel extends Model<ITask, {}, ITaskMethods> {}
 
 const AttachmentSchema = new Schema({
   id: {
@@ -82,7 +101,34 @@ const HourlyUpdateSchema = new Schema({
   }
 }, { _id: false });
 
-const TaskSchema: Schema = new Schema(
+const AssignedUserSchema = new Schema({
+  userId: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  role: {
+    type: String,
+    enum: ['manager', 'supervisor', 'employee'],
+    required: true
+  },
+  assignedAt: {
+    type: Date,
+    default: Date.now
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'in-progress', 'completed', 'cancelled'],
+    default: 'pending'
+  }
+}, { _id: false });
+
+const TaskSchema: Schema<ITask, ITaskModel> = new Schema(
   {
     title: {
       type: String,
@@ -96,16 +142,19 @@ const TaskSchema: Schema = new Schema(
       trim: true,
       minlength: [10, 'Task description must be at least 10 characters']
     },
-    assignedTo: {
-      type: String,
-      required: [true, 'Assignee is required'],
-      trim: true
+   // In Task model (Task.ts), update the assignedUsers validation (around line 78)
+
+assignedUsers: {
+  type: [AssignedUserSchema],
+  default: [],
+  validate: {
+    validator: function(users: IAssignedUser[]) {
+      // Allow empty array for templates and fully staffed sites
+      return true; // Remove the requirement for at least one assignee
     },
-    assignedToName: {
-      type: String,
-      required: [true, 'Assignee name is required'],
-      trim: true
-    },
+    message: 'At least one assignee is required'
+  }
+},
     priority: {
       type: String,
       enum: ['high', 'medium', 'low'],
@@ -178,7 +227,7 @@ const TaskSchema: Schema = new Schema(
 );
 
 // Indexes for better query performance
-TaskSchema.index({ assignedTo: 1 });
+TaskSchema.index({ 'assignedUsers.userId': 1 });
 TaskSchema.index({ siteId: 1 });
 TaskSchema.index({ status: 1 });
 TaskSchema.index({ priority: 1 });
@@ -196,4 +245,63 @@ TaskSchema.virtual('formattedDeadline').get(function(this: ITask) {
   return this.deadline.toLocaleDateString();
 });
 
-export default mongoose.model<ITask>('Task', TaskSchema);
+// Virtual to get assigned user names as comma-separated string
+TaskSchema.virtual('assignedUserNames').get(function(this: ITask) {
+  return this.assignedUsers.map(user => user.name).join(', ');
+});
+
+// Virtual to get assigned user IDs as array
+TaskSchema.virtual('assignedUserIds').get(function(this: ITask) {
+  return this.assignedUsers.map(user => user.userId);
+});
+
+// Method to check if a specific user is assigned
+TaskSchema.methods.isUserAssigned = function(userId: string): boolean {
+  return this.assignedUsers.some((user: IAssignedUser) => user.userId === userId);
+};
+
+// Method to get user's individual status
+TaskSchema.methods.getUserStatus = function(userId: string): string | null {
+  const user = this.assignedUsers.find((u: IAssignedUser) => u.userId === userId);
+  return user ? user.status : null;
+};
+
+// Method to update user's individual status
+TaskSchema.methods.updateUserStatus = function(userId: string, newStatus: string): boolean {
+  const userIndex = this.assignedUsers.findIndex((u: IAssignedUser) => u.userId === userId);
+  if (userIndex === -1) return false;
+  
+  this.assignedUsers[userIndex].status = newStatus;
+  
+  // Update overall status based on all users' statuses
+  this.updateOverallStatus();
+  
+  return true;
+};
+
+// Method to update overall status based on all users' statuses
+TaskSchema.methods.updateOverallStatus = function() {
+  const allCompleted = this.assignedUsers.every((user: IAssignedUser) => user.status === 'completed');
+  const anyInProgress = this.assignedUsers.some((user: IAssignedUser) => user.status === 'in-progress');
+  const anyCancelled = this.assignedUsers.some((user: IAssignedUser) => user.status === 'cancelled');
+  
+  if (allCompleted) {
+    this.status = 'completed';
+  } else if (anyCancelled) {
+    this.status = 'cancelled';
+  } else if (anyInProgress) {
+    this.status = 'in-progress';
+  } else {
+    this.status = 'pending';
+  }
+};
+
+// Pre-save middleware to ensure overall status consistency
+TaskSchema.pre('save', function(next) {
+  if (this.assignedUsers && this.assignedUsers.length > 0) {
+    this.updateOverallStatus();
+  }
+  next();
+});
+
+export default mongoose.model<ITask, ITaskModel>('Task', TaskSchema);

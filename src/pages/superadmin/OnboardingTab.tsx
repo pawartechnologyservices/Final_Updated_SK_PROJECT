@@ -1361,11 +1361,32 @@ const OnboardingTab = ({
     }
   };
 
-  // Handle add employee (KEEPING ORIGINAL LOGIC WITH MINOR UPDATES FOR SITE VALIDATION)
+  // UPDATED: Handle add employee with better error handling and validation
   const handleAddEmployee = async () => {
     // Validate required fields
-    if (!newEmployee.name || !newEmployee.email || !newEmployee.aadharNumber || !newEmployee.position || !newEmployee.department || !newEmployee.siteName) {
-      toast.error("Please fill all required fields (Name, Email, Aadhar Number, Position, Department, Site Name)");
+    const requiredFields = [
+      { field: newEmployee.name, name: 'Name' },
+      { field: newEmployee.email, name: 'Email' },
+      { field: newEmployee.aadharNumber, name: 'Aadhar Number' },
+      { field: newEmployee.position, name: 'Position' },
+      { field: newEmployee.department, name: 'Department' },
+      { field: newEmployee.siteName, name: 'Site Name' },
+      { field: newEmployee.salary, name: 'Salary' }
+    ];
+
+    const missingFields = requiredFields
+      .filter(item => !item.field || item.field.trim() === '')
+      .map(item => item.name);
+
+    if (missingFields.length > 0) {
+      toast.error(`Please fill all required fields: ${missingFields.join(', ')}`);
+      return;
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmployee.email)) {
+      toast.error("Please enter a valid email address");
       return;
     }
 
@@ -1388,8 +1409,9 @@ const OnboardingTab = ({
     }
 
     // Validate salary
-    if (!newEmployee.salary || parseFloat(newEmployee.salary) <= 0) {
-      toast.error("Please enter a valid salary amount");
+    const salaryValue = parseFloat(newEmployee.salary);
+    if (isNaN(salaryValue) || salaryValue <= 0) {
+      toast.error("Please enter a valid salary amount greater than 0");
       return;
     }
 
@@ -1414,48 +1436,48 @@ const OnboardingTab = ({
         formData.append('authorizedSignature', newEmployee.authorizedSignature);
       }
 
-      // Add other form data
+      // Clean and prepare data for sending
       const employeeDataToSend = {
-        name: newEmployee.name,
-        email: newEmployee.email,
-        phone: newEmployee.phone,
-        aadharNumber: newEmployee.aadharNumber,
-        panNumber: newEmployee.panNumber?.toUpperCase() || '',
-        esicNumber: newEmployee.esicNumber,
-        uanNumber: newEmployee.uanNumber,
-        siteName: newEmployee.siteName,
-        dateOfBirth: newEmployee.dateOfBirth,
-        dateOfJoining: newEmployee.dateOfJoining,
-        dateOfExit: newEmployee.dateOfExit,
-        bloodGroup: newEmployee.bloodGroup,
-        gender: newEmployee.gender,
-        maritalStatus: newEmployee.maritalStatus,
-        permanentAddress: newEmployee.permanentAddress,
-        permanentPincode: newEmployee.permanentPincode,
-        localAddress: newEmployee.localAddress,
-        localPincode: newEmployee.localPincode,
-        bankName: newEmployee.bankName,
-        accountNumber: newEmployee.accountNumber,
-        ifscCode: newEmployee.ifscCode.toUpperCase(),
-        branchName: newEmployee.branchName,
-        fatherName: newEmployee.fatherName,
-        motherName: newEmployee.motherName,
-        spouseName: newEmployee.spouseName,
-        numberOfChildren: newEmployee.numberOfChildren,
-        emergencyContactName: newEmployee.emergencyContactName,
-        emergencyContactPhone: newEmployee.emergencyContactPhone,
-        emergencyContactRelation: newEmployee.emergencyContactRelation,
-        nomineeName: newEmployee.nomineeName,
-        nomineeRelation: newEmployee.nomineeRelation,
-        pantSize: newEmployee.pantSize,
-        shirtSize: newEmployee.shirtSize,
-        capSize: newEmployee.capSize,
+        name: newEmployee.name.trim(),
+        email: newEmployee.email.toLowerCase().trim(),
+        phone: newEmployee.phone?.trim() || '',
+        aadharNumber: newEmployee.aadharNumber.replace(/\s/g, ''),
+        panNumber: newEmployee.panNumber?.toUpperCase().replace(/\s/g, '') || '',
+        esicNumber: newEmployee.esicNumber?.trim() || '',
+        uanNumber: newEmployee.uanNumber?.trim() || '',
+        siteName: newEmployee.siteName.trim(),
+        dateOfBirth: newEmployee.dateOfBirth || '',
+        dateOfJoining: newEmployee.dateOfJoining || new Date().toISOString().split("T")[0],
+        dateOfExit: newEmployee.dateOfExit || '',
+        bloodGroup: newEmployee.bloodGroup || '',
+        gender: newEmployee.gender || '',
+        maritalStatus: newEmployee.maritalStatus || '',
+        permanentAddress: newEmployee.permanentAddress?.trim() || '',
+        permanentPincode: newEmployee.permanentPincode?.trim() || '',
+        localAddress: newEmployee.localAddress?.trim() || '',
+        localPincode: newEmployee.localPincode?.trim() || '',
+        bankName: newEmployee.bankName?.trim() || '',
+        accountNumber: newEmployee.accountNumber?.replace(/\s/g, '') || '',
+        ifscCode: newEmployee.ifscCode?.toUpperCase().replace(/\s/g, '') || '',
+        branchName: newEmployee.branchName?.trim() || '',
+        fatherName: newEmployee.fatherName?.trim() || '',
+        motherName: newEmployee.motherName?.trim() || '',
+        spouseName: newEmployee.spouseName?.trim() || '',
+        numberOfChildren: newEmployee.numberOfChildren?.trim() || '',
+        emergencyContactName: newEmployee.emergencyContactName?.trim() || '',
+        emergencyContactPhone: newEmployee.emergencyContactPhone?.trim() || '',
+        emergencyContactRelation: newEmployee.emergencyContactRelation?.trim() || '',
+        nomineeName: newEmployee.nomineeName?.trim() || '',
+        nomineeRelation: newEmployee.nomineeRelation?.trim() || '',
+        pantSize: newEmployee.pantSize || '',
+        shirtSize: newEmployee.shirtSize || '',
+        capSize: newEmployee.capSize || '',
         idCardIssued: newEmployee.idCardIssued,
         westcoatIssued: newEmployee.westcoatIssued,
         apronIssued: newEmployee.apronIssued,
-        department: newEmployee.department,
-        position: newEmployee.position,
-        salary: newEmployee.salary
+        department: newEmployee.department.trim(),
+        position: newEmployee.position.trim(),
+        salary: salaryValue.toString()
       };
 
       // Append all other data
@@ -1465,7 +1487,7 @@ const OnboardingTab = ({
         }
       });
 
-      console.log('Sending employee data to backend...');
+      console.log('Sending employee data to backend...', employeeDataToSend);
 
       const response = await fetch(`${API_URL}/employees`, {
         method: "POST",
@@ -1473,15 +1495,18 @@ const OnboardingTab = ({
       });
 
       const data = await response.json();
+      console.log('Server response:', data);
 
       if (!response.ok) {
-        throw new Error(data.message || data.error || "Failed to create employee");
+        // Handle specific error messages from server
+        const errorMessage = data.message || data.error || `Server error: ${response.status}`;
+        throw new Error(errorMessage);
       }
 
       toast.success("Employee created successfully!");
       
       // The backend returns the employee data with Cloudinary URLs
-      const createdEmployee = data.employee;
+      const createdEmployee = data.employee || data.data || data;
       
       // Debug: Log the created employee data
       console.log('Created employee data:', createdEmployee);
@@ -1555,7 +1580,15 @@ const OnboardingTab = ({
 
     } catch (error: any) {
       console.error("Error creating employee:", error);
-      toast.error(error.message || "Error creating employee. Please try again.");
+      
+      // Show more specific error message
+      if (error.message.includes('500')) {
+        toast.error("Server error. Please check if the backend server is running and try again.");
+      } else if (error.message.includes('Failed to fetch')) {
+        toast.error("Network error. Please check your connection and ensure the backend server is running.");
+      } else {
+        toast.error(error.message || "Error creating employee. Please try again.");
+      }
     } finally {
       setLoading(false);
     }

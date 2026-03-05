@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,11 +43,19 @@ import {
   UserCog,
   Target,
   Percent,
-  FileText
+  FileText,
+  Shield,
+  ShieldCheck
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { siteService, Site } from "@/services/SiteService";
+import axios from "axios";
+
+// API URL
+const API_URL = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:5001/api' 
+  : '/api';
 
 // Department data matching the dashboard
 const departmentViewData = [
@@ -89,7 +97,7 @@ const departmentViewData = [
   },
 ];
 
-// Employee data structure - Updated with real employee fields
+// Employee data structure
 interface Employee {
   id: string;
   _id?: string;
@@ -120,6 +128,8 @@ interface Employee {
   reportingManager?: string;
   createdAt?: string;
   updatedAt?: string;
+  isManager?: boolean;
+  isSupervisor?: boolean;
 }
 
 // Attendance Record structure
@@ -147,8 +157,20 @@ interface AttendanceRecord {
   earlyLeaveMinutes?: number;
 }
 
-// API base URL
-const API_URL = `http://${window.location.hostname}:5001/api`;
+// Site Deployment Stats interface
+interface SiteDeploymentStats {
+  totalStaff: number;
+  managerCount: number;
+  supervisorCount: number;
+  staffCount: number;
+  managerRequirement: number;
+  supervisorRequirement: number;
+  staffRequirement: number;
+  dailyStaffRequirement: number;
+  totalStaffRequirementForPeriod: number;
+  isStaffFull: boolean;
+  remainingStaff: number;
+}
 
 // Helper function to calculate days between dates
 const calculateDaysBetween = (startDate: string, endDate: string): number => {
@@ -156,7 +178,7 @@ const calculateDaysBetween = (startDate: string, endDate: string): number => {
   const end = new Date(endDate);
   const timeDiff = end.getTime() - start.getTime();
   const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-  return daysDiff + 1; // +1 to include both start and end dates
+  return daysDiff + 1; // Inclusive of both start and end dates
 };
 
 // Helper function to format date
@@ -176,6 +198,17 @@ const formatDateDisplay = (dateString: string) => {
     month: 'short',
     day: 'numeric'
   });
+};
+
+// Helper function to check if employee is manager or supervisor
+const isManagerOrSupervisor = (employee: Employee): boolean => {
+  const position = employee.position?.toLowerCase() || '';
+  const department = employee.department?.toLowerCase() || '';
+  
+  return position.includes('manager') || 
+         position.includes('supervisor') || 
+         department.includes('manager') || 
+         department.includes('supervisor');
 };
 
 // Helper function to format time
@@ -219,26 +252,29 @@ const fetchEmployees = async (): Promise<Employee[]> => {
   try {
     console.log('🔄 Fetching employees from API...');
     
-    const response = await fetch(`${API_URL}/employees`);
-    const data = await response.json();
+    const response = await axios.get(`${API_URL}/employees`, {
+      params: { limit: 1000 }
+    });
     
-    console.log('Employees API response:', data);
+    console.log('Employees API response:', response.data);
     
-    if (response.ok) {
-      let employeesData = [];
-      
-      if (Array.isArray(data)) {
-        employeesData = data;
-      } else if (data.success && Array.isArray(data.data)) {
-        employeesData = data.data;
-      } else if (Array.isArray(data.employees)) {
-        employeesData = data.employees;
-      } else if (data.data && Array.isArray(data.data.employees)) {
-        employeesData = data.data.employees;
+    let employeesData = [];
+    
+    if (response.data) {
+      if (Array.isArray(response.data)) {
+        employeesData = response.data;
+      } else if (response.data.success && Array.isArray(response.data.data)) {
+        employeesData = response.data.data;
+      } else if (Array.isArray(response.data.employees)) {
+        employeesData = response.data.employees;
+      } else if (response.data.data && Array.isArray(response.data.data.employees)) {
+        employeesData = response.data.data.employees;
       }
-      
-      // Transform employees data to match our interface
-      const transformedEmployees: Employee[] = employeesData.map((emp: any) => ({
+    }
+    
+    // Transform employees data to match our interface
+    const transformedEmployees: Employee[] = employeesData.map((emp: any) => {
+      const employee = {
         id: emp._id || emp.id || `emp_${Math.random()}`,
         _id: emp._id || emp.id,
         employeeId: emp.employeeId || emp.employeeID || `EMP${String(Math.random()).slice(2, 6)}`,
@@ -249,7 +285,7 @@ const fetchEmployees = async (): Promise<Employee[]> => {
         position: emp.position || emp.designation || emp.role || "Employee",
         site: emp.site || emp.siteName || "Main Site",
         siteName: emp.siteName || emp.site || "Main Site",
-        status: "present" as const, // Default status, will be updated by attendance data
+        status: "present" as const,
         employeeStatus: (emp.status || "active") as string,
         role: emp.role || 'employee',
         gender: emp.gender || '',
@@ -263,15 +299,23 @@ const fetchEmployees = async (): Promise<Employee[]> => {
         reportingManager: emp.reportingManager || emp.manager || '',
         createdAt: emp.createdAt || emp.created || new Date().toISOString(),
         updatedAt: emp.updatedAt || emp.updated || new Date().toISOString(),
-        date: new Date().toISOString().split('T')[0] // Current date as default
-      }));
+        date: new Date().toISOString().split('T')[0],
+        isManager: false,
+        isSupervisor: false
+      };
       
-      console.log(`✅ Loaded ${transformedEmployees.length} employees`);
-      return transformedEmployees;
-    } else {
-      console.error('Failed to fetch employees:', data.message || data.error);
-      throw new Error(data.message || 'Failed to load employees');
-    }
+      // Set manager/supervisor flags
+      const position = employee.position?.toLowerCase() || '';
+      const department = employee.department?.toLowerCase() || '';
+      
+      employee.isManager = position.includes('manager') || department.includes('manager');
+      employee.isSupervisor = position.includes('supervisor') || department.includes('supervisor');
+      
+      return employee;
+    });
+    
+    console.log(`✅ Loaded ${transformedEmployees.length} employees`);
+    return transformedEmployees;
   } catch (error: any) {
     console.error('Error fetching employees:', error);
     throw new Error(`Error loading employees: ${error.message}`);
@@ -283,19 +327,151 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
   try {
     console.log(`🔄 Fetching attendance records from ${start} to ${end}`);
     
-    // Try bulk range endpoint first
+    // First, try to fetch all attendance records (might be paginated)
     try {
-      const response = await fetch(`${API_URL}/attendance/range?startDate=${start}&endDate=${end}`);
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Attendance range API response:', data);
+      // Try to get all attendance records first (some APIs support this)
+      const response = await axios.get(`${API_URL}/attendance`, {
+        params: { 
+          startDate: start, 
+          endDate: end,
+          limit: 1000 // Get as many as possible
+        }
+      });
+      
+      console.log('Attendance API response:', response.data);
+      
+      if (response.data) {
+        let records = [];
         
-        if (data.success && Array.isArray(data.data)) {
-          const transformedRecords: AttendanceRecord[] = data.data.map((record: any) => ({
+        if (response.data.success && Array.isArray(response.data.data)) {
+          records = response.data.data;
+        } else if (Array.isArray(response.data)) {
+          records = response.data;
+        } else if (response.data.attendance && Array.isArray(response.data.attendance)) {
+          records = response.data.attendance;
+        }
+        
+        // Filter records by date range if API doesn't support range filtering
+        const filteredRecords = records.filter((record: any) => {
+          const recordDate = record.date;
+          return recordDate >= start && recordDate <= end;
+        });
+        
+        const transformedRecords: AttendanceRecord[] = filteredRecords.map((record: any) => ({
+          _id: record._id || record.id || `att_${Math.random()}`,
+          employeeId: record.employeeId || record.employee?._id || '',
+          employeeName: record.employeeName || record.employee?.name || 'Unknown',
+          date: record.date || '',
+          checkInTime: record.checkInTime || null,
+          checkOutTime: record.checkOutTime || null,
+          breakStartTime: record.breakStartTime || null,
+          breakEndTime: record.breakEndTime || null,
+          totalHours: Number(record.totalHours) || 0,
+          breakTime: Number(record.breakTime) || 0,
+          status: (record.status?.toLowerCase() || 'absent') as 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off',
+          isCheckedIn: Boolean(record.isCheckedIn),
+          isOnBreak: Boolean(record.isOnBreak),
+          supervisorId: record.supervisorId,
+          remarks: record.remarks || '',
+          siteName: record.siteName || record.site || record.department || '',
+          department: record.department || '',
+          shift: record.shift || '',
+          overtimeHours: Number(record.overtimeHours) || 0,
+          lateMinutes: Number(record.lateMinutes) || 0,
+          earlyLeaveMinutes: Number(record.earlyLeaveMinutes) || 0
+        }));
+        
+        console.log(`✅ Loaded ${transformedRecords.length} attendance records from main endpoint`);
+        return transformedRecords;
+      }
+    } catch (mainError) {
+      console.log('Main attendance endpoint failed, trying range endpoint:', mainError);
+    }
+    
+    // Try bulk range endpoint second
+    try {
+      const response = await axios.get(`${API_URL}/attendance/range`, {
+        params: { startDate: start, endDate: end }
+      });
+      
+      console.log('Attendance range API response:', response.data);
+      
+      if (response.data) {
+        let records = [];
+        
+        if (response.data.success && Array.isArray(response.data.data)) {
+          records = response.data.data;
+        } else if (Array.isArray(response.data)) {
+          records = response.data;
+        } else if (response.data.attendance && Array.isArray(response.data.attendance)) {
+          records = response.data.attendance;
+        }
+        
+        const transformedRecords: AttendanceRecord[] = records.map((record: any) => ({
+          _id: record._id || record.id || `att_${Math.random()}`,
+          employeeId: record.employeeId || record.employee?._id || '',
+          employeeName: record.employeeName || record.employee?.name || 'Unknown',
+          date: record.date || '',
+          checkInTime: record.checkInTime || null,
+          checkOutTime: record.checkOutTime || null,
+          breakStartTime: record.breakStartTime || null,
+          breakEndTime: record.breakEndTime || null,
+          totalHours: Number(record.totalHours) || 0,
+          breakTime: Number(record.breakTime) || 0,
+          status: (record.status?.toLowerCase() || 'absent') as 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off',
+          isCheckedIn: Boolean(record.isCheckedIn),
+          isOnBreak: Boolean(record.isOnBreak),
+          supervisorId: record.supervisorId,
+          remarks: record.remarks || '',
+          siteName: record.siteName || record.site || record.department || '',
+          department: record.department || '',
+          shift: record.shift || '',
+          overtimeHours: Number(record.overtimeHours) || 0,
+          lateMinutes: Number(record.lateMinutes) || 0,
+          earlyLeaveMinutes: Number(record.earlyLeaveMinutes) || 0
+        }));
+        
+        console.log(`✅ Loaded ${transformedRecords.length} attendance records from range endpoint`);
+        return transformedRecords;
+      }
+    } catch (rangeError: any) {
+      console.log('Range endpoint failed:', rangeError.message);
+      // Don't log full error, just the message
+    }
+    
+    // Fallback: fetch day by day
+    console.log('Falling back to day-by-day attendance fetch...');
+    const allRecords: AttendanceRecord[] = [];
+    const startDateObj = new Date(start);
+    const endDateObj = new Date(end);
+    
+    // Calculate total days for progress tracking
+    const totalDays = calculateDaysBetween(start, end);
+    let daysProcessed = 0;
+    
+    for (let d = new Date(startDateObj); d <= endDateObj; d.setDate(d.getDate() + 1)) {
+      const dateStr = formatDate(d);
+      try {
+        const response = await axios.get(`${API_URL}/attendance`, {
+          params: { date: dateStr }
+        });
+        
+        if (response.data) {
+          let dayRecords = [];
+          
+          if (response.data.success && Array.isArray(response.data.data)) {
+            dayRecords = response.data.data;
+          } else if (Array.isArray(response.data)) {
+            dayRecords = response.data;
+          } else if (response.data.attendance && Array.isArray(response.data.attendance)) {
+            dayRecords = response.data.attendance;
+          }
+          
+          const transformedDayRecords: AttendanceRecord[] = dayRecords.map((record: any) => ({
             _id: record._id || record.id || `att_${Math.random()}`,
             employeeId: record.employeeId || record.employee?._id || '',
             employeeName: record.employeeName || record.employee?.name || 'Unknown',
-            date: record.date || '',
+            date: record.date || dateStr,
             checkInTime: record.checkInTime || null,
             checkOutTime: record.checkOutTime || null,
             breakStartTime: record.breakStartTime || null,
@@ -315,70 +491,33 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
             earlyLeaveMinutes: Number(record.earlyLeaveMinutes) || 0
           }));
           
-          console.log(`✅ Loaded ${transformedRecords.length} attendance records`);
-          return transformedRecords;
+          allRecords.push(...transformedDayRecords);
         }
-      }
-    } catch (rangeError) {
-      console.log('Range endpoint failed, trying day-by-day:', rangeError);
-    }
-    
-    // Fallback: fetch day by day
-    const allRecords: AttendanceRecord[] = [];
-    const startDateObj = new Date(start);
-    const endDateObj = new Date(end);
-    
-    for (let d = new Date(startDateObj); d <= endDateObj; d.setDate(d.getDate() + 1)) {
-      const dateStr = formatDate(d);
-      try {
-        const response = await fetch(`${API_URL}/attendance?date=${dateStr}`);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && Array.isArray(data.data)) {
-            const dayRecords: AttendanceRecord[] = data.data.map((record: any) => ({
-              _id: record._id || record.id || `att_${Math.random()}`,
-              employeeId: record.employeeId || record.employee?._id || '',
-              employeeName: record.employeeName || record.employee?.name || 'Unknown',
-              date: record.date || dateStr,
-              checkInTime: record.checkInTime || null,
-              checkOutTime: record.checkOutTime || null,
-              breakStartTime: record.breakStartTime || null,
-              breakEndTime: record.breakEndTime || null,
-              totalHours: Number(record.totalHours) || 0,
-              breakTime: Number(record.breakTime) || 0,
-              status: (record.status?.toLowerCase() || 'absent') as 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off',
-              isCheckedIn: Boolean(record.isCheckedIn),
-              isOnBreak: Boolean(record.isOnBreak),
-              supervisorId: record.supervisorId,
-              remarks: record.remarks || '',
-              siteName: record.siteName || record.site || record.department || '',
-              department: record.department || '',
-              shift: record.shift || '',
-              overtimeHours: Number(record.overtimeHours) || 0,
-              lateMinutes: Number(record.lateMinutes) || 0,
-              earlyLeaveMinutes: Number(record.earlyLeaveMinutes) || 0
-            }));
-            allRecords.push(...dayRecords);
-          }
+        
+        daysProcessed++;
+        if (daysProcessed % 5 === 0) {
+          console.log(`Processed ${daysProcessed}/${totalDays} days...`);
         }
-      } catch (dayError) {
-        console.log(`Failed to fetch attendance for ${dateStr}:`, dayError);
+      } catch (dayError: any) {
+        console.log(`No attendance data for ${dateStr}: ${dayError.message}`);
+        // Continue to next day even if this one fails
       }
       
       // Small delay to avoid overwhelming the server
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
-    console.log(`✅ Loaded ${allRecords.length} attendance records (day-by-day)`);
+    console.log(`✅ Loaded ${allRecords.length} attendance records across ${totalDays} days (day-by-day)`);
     return allRecords;
     
   } catch (error: any) {
     console.error('Error fetching attendance records:', error);
-    throw new Error(`Error loading attendance: ${error.message}`);
+    // Return empty array instead of throwing to prevent cascading failures
+    return [];
   }
 };
 
-// Generate employee data for sites with weekly off counted in present - Updated to use real data
+// Generate employee data for sites - MODIFIED TO USE REAL DATA WITH DATE RANGE
 const generateEmployeeData = async (siteName: string, startDate: string, endDate: string): Promise<Employee[]> => {
   try {
     const employees: Employee[] = [];
@@ -391,89 +530,118 @@ const generateEmployeeData = async (siteName: string, startDate: string, endDate
       emp.site === siteName || emp.siteName === siteName
     );
     
-    // Fetch attendance for the period
+    // If no employees found for this site, return empty array
+    if (siteEmployees.length === 0) {
+      console.log(`No employees found for site: ${siteName}`);
+      return [];
+    }
+    
+    // Fetch attendance for the entire date range
     const attendanceRecords = await fetchAttendanceRecords(startDate, endDate);
     
-    // Get the most recent date in the period for sample data
-    const recentDate = endDate;
+    // Create a map of attendance records by employee and date for quick lookup
+    const attendanceMap = new Map<string, AttendanceRecord>();
+    attendanceRecords.forEach(record => {
+      const key = `${record.employeeId}_${record.date}`;
+      attendanceMap.set(key, record);
+    });
     
-    // Create employee records with attendance data
-    for (const employee of siteEmployees) {
-      // Get attendance records for this employee
-      const empAttendance = attendanceRecords.filter(record => 
-        record.employeeId === employee._id || record.employeeId === employee.id
-      );
+    // For each date in the range, create employee records
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const daysInPeriod = calculateDaysBetween(startDate, endDate);
+    
+    console.log(`Generating employee data for ${siteName} from ${startDate} to ${endDate} (${daysInPeriod} days) with ${siteEmployees.length} employees`);
+    
+    for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+      const currentDate = formatDate(date);
       
-      // Get attendance for the most recent date
-      const recentAttendance = empAttendance.find(record => record.date === recentDate);
-      
-      // Determine status based on attendance
-      let status: 'present' | 'absent' | 'leave' | 'weekly-off' = 'absent';
-      let checkInTime = '';
-      let checkOutTime = '';
-      let remark = '';
-      
-      if (recentAttendance) {
-        status = recentAttendance.status as any;
-        checkInTime = recentAttendance.checkInTime ? formatTimeForDisplay(recentAttendance.checkInTime) : '';
-        checkOutTime = recentAttendance.checkOutTime ? formatTimeForDisplay(recentAttendance.checkOutTime) : '';
-        remark = recentAttendance.remarks || '';
+      for (const employee of siteEmployees) {
+        // Get attendance for this date
+        const attendanceKey = `${employee._id || employee.id}_${currentDate}`;
+        const attendance = attendanceMap.get(attendanceKey);
+        
+        // Determine status based on attendance
+        let status: 'present' | 'absent' | 'leave' | 'weekly-off' = 'absent';
+        let checkInTime = '';
+        let checkOutTime = '';
+        let remark = '';
+        
+        if (attendance) {
+          status = attendance.status as any;
+          checkInTime = attendance.checkInTime ? formatTimeForDisplay(attendance.checkInTime) : '';
+          checkOutTime = attendance.checkOutTime ? formatTimeForDisplay(attendance.checkOutTime) : '';
+          remark = attendance.remarks || '';
+        } else {
+          // If no attendance record, check if it's a weekend for demo purposes
+          const dayOfWeek = date.getDay();
+          if (dayOfWeek === 0 || dayOfWeek === 6) {
+            // Weekend - could be weekly off
+            status = Math.random() > 0.5 ? 'weekly-off' : 'absent';
+          } else {
+            status = 'absent';
+          }
+        }
+        
+        employees.push({
+          id: `${employee.employeeId || employee.id}_${currentDate}`,
+          _id: employee._id,
+          employeeId: employee.employeeId,
+          name: employee.name,
+          department: employee.department,
+          position: employee.position,
+          isManager: employee.isManager,
+          isSupervisor: employee.isSupervisor,
+          status: status,
+          checkInTime: checkInTime,
+          checkOutTime: checkOutTime,
+          site: siteName,
+          siteName: siteName,
+          date: currentDate,
+          remark: remark,
+          action: 'none',
+          email: employee.email,
+          phone: employee.phone,
+          employeeStatus: employee.employeeStatus,
+          role: employee.role,
+          gender: employee.gender,
+          dateOfJoining: employee.dateOfJoining,
+          dateOfBirth: employee.dateOfBirth,
+          salary: employee.salary,
+          assignedSites: employee.assignedSites,
+          shift: employee.shift,
+          workingHours: employee.workingHours,
+          employeeType: employee.employeeType,
+          reportingManager: employee.reportingManager,
+          createdAt: employee.createdAt,
+          updatedAt: employee.updatedAt
+        });
       }
-      
-      // Generate random action (for demo purposes, maintain existing functionality)
-      const actions = ['fine', 'advance', 'other', 'none'] as const;
-      const hasAction = Math.random() > 0.7;
-      const action = hasAction ? actions[Math.floor(Math.random() * actions.length)] : 'none';
-      
-      employees.push({
-        id: employee.employeeId || employee.id,
-        _id: employee._id,
-        employeeId: employee.employeeId,
-        name: employee.name,
-        department: employee.department,
-        position: employee.position,
-        status: status,
-        checkInTime: checkInTime,
-        checkOutTime: checkOutTime,
-        site: siteName,
-        siteName: siteName,
-        date: recentDate,
-        remark: remark,
-        action: action,
-        email: employee.email,
-        phone: employee.phone,
-        employeeStatus: employee.employeeStatus,
-        role: employee.role,
-        gender: employee.gender,
-        dateOfJoining: employee.dateOfJoining,
-        dateOfBirth: employee.dateOfBirth,
-        salary: employee.salary,
-        assignedSites: employee.assignedSites,
-        shift: employee.shift,
-        workingHours: employee.workingHours,
-        employeeType: employee.employeeType,
-        reportingManager: employee.reportingManager,
-        createdAt: employee.createdAt,
-        updatedAt: employee.updatedAt
-      });
+    }
+    
+    // If no attendance records found and we have employees, use default status
+    if (employees.length > 0 && attendanceRecords.length === 0) {
+      console.log(`No attendance records found for ${siteName}, marking all as absent by default`);
+      // All employees are already marked as absent from the logic above
     }
     
     // If no real employees found, generate demo data as fallback
     if (employees.length === 0) {
       console.log('No real employees found, generating demo data for', siteName);
-      return generateDemoEmployeeData(siteName, startDate);
+      return generateDemoEmployeeData(siteName, startDate, endDate);
     }
     
+    console.log(`Generated ${employees.length} employee records for ${siteName}`);
     return employees;
   } catch (error) {
     console.error('Error generating employee data:', error);
     // Fallback to demo data if real data fails
-    return generateDemoEmployeeData(siteName, startDate);
+    return generateDemoEmployeeData(siteName, startDate, endDate);
   }
 };
 
-// Generate demo employee data (fallback)
-const generateDemoEmployeeData = (siteName: string, date: string): Employee[] => {
+// Generate demo employee data (fallback) - MODIFIED TO USE DATE RANGE
+const generateDemoEmployeeData = (siteName: string, startDate: string, endDate: string): Employee[] => {
   const employees: Employee[] = [];
   const departments = ['Housekeeping', 'Security', 'Parking', 'Waste Management', 'Consumables', 'Other'];
   const positions = ['Staff', 'Supervisor', 'Manager', 'Executive'];
@@ -491,147 +659,284 @@ const generateDemoEmployeeData = (siteName: string, date: string): Employee[] =>
     ''
   ];
   
-  // Generate demo employees
+  // Generate demo employees for each date in the range
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const daysInPeriod = calculateDaysBetween(startDate, endDate);
+  
+  // Base employees (same across dates)
+  const baseEmployees: { id: string; name: string; department: string; position: string; isManager: boolean; isSupervisor: boolean; }[] = [];
   const totalEmployees = 10 + Math.floor(Math.random() * 20);
-  const presentCount = Math.floor(totalEmployees * (0.85 + Math.random() * 0.1));
-  const weeklyOffCount = Math.floor(presentCount * 0.15);
-  const regularPresentCount = presentCount - weeklyOffCount;
   
-  // Generate weekly off employees (counted in present)
-  for (let i = 1; i <= weeklyOffCount; i++) {
-    employees.push({
-      id: `EMP${siteName.substring(0, 3).toUpperCase()}${date.replace(/-/g, '')}WO${i}`,
-      name: `Employee ${i} ${siteName.substring(0, 8)}`,
+  for (let i = 1; i <= totalEmployees; i++) {
+    const position = positions[Math.floor(Math.random() * positions.length)];
+    const isManager = position === 'Manager';
+    const isSupervisor = position === 'Supervisor';
+    
+    baseEmployees.push({
+      id: `DEMO${siteName.substring(0, 3).toUpperCase()}${i.toString().padStart(3, '0')}`,
+      name: `Demo Employee ${i}`,
       department: departments[Math.floor(Math.random() * departments.length)],
-      position: positions[Math.floor(Math.random() * positions.length)],
-      status: 'weekly-off',
-      site: siteName,
-      siteName: siteName,
-      date: date,
-      remark: 'Weekly off',
-      action: 'none'
+      position: position,
+      isManager,
+      isSupervisor
     });
   }
   
-  // Generate regular present employees
-  for (let i = 1; i <= regularPresentCount; i++) {
-    const hasRemark = Math.random() > 0.5;
-    const hasAction = Math.random() > 0.7;
+  // For each date, create attendance records
+  for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const currentDate = formatDate(date);
+    const isWeekend = date.getDay() === 0 || date.getDay() === 6; // Saturday or Sunday
     
-    employees.push({
-      id: `EMP${siteName.substring(0, 3).toUpperCase()}${date.replace(/-/g, '')}${i}`,
-      name: `Employee ${i} ${siteName.substring(0, 8)}`,
-      department: departments[Math.floor(Math.random() * departments.length)],
-      position: positions[Math.floor(Math.random() * positions.length)],
-      status: 'present',
-      checkInTime: '08:00',
-      checkOutTime: '17:00',
-      site: siteName,
-      siteName: siteName,
-      date: date,
-      remark: hasRemark ? remarks[Math.floor(Math.random() * remarks.length)] : '',
-      action: hasAction ? actions[Math.floor(Math.random() * actions.length)] : 'none'
-    });
-  }
-  
-  // Generate absent employees (remaining)
-  const absentCount = totalEmployees - presentCount;
-  for (let i = 1; i <= absentCount; i++) {
-    const hasRemark = Math.random() > 0.3;
-    const hasAction = Math.random() > 0.5;
-    
-    employees.push({
-      id: `EMP${siteName.substring(0, 3).toUpperCase()}${date.replace(/-/g, '')}A${i}`,
-      name: `Employee ${i} ${siteName.substring(0, 8)}`,
-      department: departments[Math.floor(Math.random() * departments.length)],
-      position: positions[Math.floor(Math.random() * positions.length)],
-      status: 'absent',
-      site: siteName,
-      siteName: siteName,
-      date: date,
-      remark: hasRemark ? remarks[Math.floor(Math.random() * remarks.length)] : '',
-      action: hasAction ? actions[Math.floor(Math.random() * actions.length)] : 'none'
+    baseEmployees.forEach((baseEmp, index) => {
+      // Random status with some logic
+      let status: 'present' | 'absent' | 'leave' | 'weekly-off';
+      
+      if (isWeekend && Math.random() > 0.7) {
+        status = 'weekly-off';
+      } else {
+        const rand = Math.random();
+        if (rand < 0.75) {
+          status = 'present';
+        } else if (rand < 0.9) {
+          status = 'absent';
+        } else {
+          status = 'leave';
+        }
+      }
+      
+      const hasRemark = Math.random() > 0.5;
+      const hasAction = Math.random() > 0.7;
+      
+      employees.push({
+        id: `${baseEmp.id}_${currentDate}`,
+        employeeId: baseEmp.id,
+        name: baseEmp.name,
+        department: baseEmp.department,
+        position: baseEmp.position,
+        isManager: baseEmp.isManager,
+        isSupervisor: baseEmp.isSupervisor,
+        status: status,
+        checkInTime: status === 'present' ? '09:00 AM' : '',
+        checkOutTime: status === 'present' ? '06:00 PM' : '',
+        site: siteName,
+        siteName: siteName,
+        date: currentDate,
+        remark: hasRemark ? remarks[Math.floor(Math.random() * remarks.length)] : '',
+        action: hasAction ? actions[Math.floor(Math.random() * actions.length)] : 'none',
+        email: `demo${index}@example.com`,
+        phone: `+123456789${index}`,
+        employeeStatus: 'active',
+        role: 'employee',
+        shift: 'General',
+        workingHours: '9:00 AM - 6:00 PM',
+        employeeType: 'Full-time'
+      });
     });
   }
   
   return employees;
 };
 
-// Calculate attendance data for a site for a given period
+// Calculate site deployment statistics
+const calculateSiteDeploymentStats = (site: Site, employees: Employee[]): SiteDeploymentStats => {
+  const managerRequirement = site.managerCount || 0;
+  const supervisorRequirement = site.supervisorCount || 0;
+  
+  // Calculate staff requirement from staffDeployment (excluding managers and supervisors)
+  const staffRequirement = Array.isArray(site.staffDeployment) 
+    ? site.staffDeployment.reduce((total, item) => {
+        const role = item.role?.toLowerCase() || '';
+        if (!role.includes('manager') && !role.includes('supervisor')) {
+          return total + (Number(item.count) || 0);
+        }
+        return total;
+      }, 0)
+    : 0;
+  
+  // Count current employees by role
+  let managerCount = 0;
+  let supervisorCount = 0;
+  let staffCount = 0;
+  
+  employees.forEach(emp => {
+    if (emp.isManager) {
+      managerCount++;
+    } else if (emp.isSupervisor) {
+      supervisorCount++;
+    } else {
+      staffCount++;
+    }
+  });
+  
+  const totalStaff = managerCount + supervisorCount + staffCount;
+  const dailyStaffRequirement = staffRequirement; // Daily staff requirement (excluding managers/supervisors)
+  const remainingStaff = Math.max(0, staffRequirement - staffCount);
+  const isStaffFull = staffCount >= staffRequirement;
+  
+  return {
+    totalStaff,
+    managerCount,
+    supervisorCount,
+    staffCount,
+    managerRequirement,
+    supervisorRequirement,
+    staffRequirement,
+    dailyStaffRequirement,
+    totalStaffRequirementForPeriod: dailyStaffRequirement,
+    isStaffFull,
+    remainingStaff
+  };
+};
+
+// Calculate attendance data for a site for a given period - MODIFIED TO SHOW CUMULATIVE TOTALS WITH DAILY REQUIREMENT MULTIPLIED BY DAYS
 const calculateSiteAttendanceData = async (site: Site, startDate: string, endDate: string) => {
   const daysInPeriod = calculateDaysBetween(startDate, endDate);
   const isSingleDay = daysInPeriod === 1;
   
-  // Get staff count from the site data
-  const totalEmployees = siteService.getTotalStaff(site);
-  
-  // For demo purposes, calculate present based on random attendance rate
-  const attendanceRate = 0.85 + (Math.random() * 0.1); // 85-95% attendance rate
-  const totalPresent = Math.floor(totalEmployees * attendanceRate);
-  const weeklyOffCount = Math.floor(totalPresent * 0.15);
-  const actualPresent = totalPresent - weeklyOffCount;
-  const absentCount = totalEmployees - totalPresent;
-  
-  // Calculate cumulative totals for the period
-  const durationTotalRequired = totalEmployees * daysInPeriod;
-  const durationWeeklyOff = weeklyOffCount * daysInPeriod;
-  const durationOnSiteRequirement = durationTotalRequired - durationWeeklyOff;
-  const durationPresent = actualPresent * daysInPeriod;
-  const durationAbsent = absentCount * daysInPeriod;
-  
-  // Existing calculations for backward compatibility
-  const totalRequiredAttendance = daysInPeriod * totalEmployees;
-  const totalPresentAttendance = totalPresent * daysInPeriod;
-  const periodShortage = absentCount * daysInPeriod;
-  
-  // Fetch real employee data
+  // Fetch real employee data for the entire date range
   let employees: Employee[] = [];
   try {
     employees = await generateEmployeeData(site.name, startDate, endDate);
   } catch (error) {
     console.error('Error fetching employee data:', error);
     // Fallback to generated data
-    employees = generateDemoEmployeeData(site.name, startDate);
+    employees = generateDemoEmployeeData(site.name, startDate, endDate);
   }
+  
+  // Calculate deployment stats
+  const deploymentStats = calculateSiteDeploymentStats(site, employees);
+  
+  // Daily staff requirement (excluding managers and supervisors)
+  const dailyRequirement = deploymentStats.dailyStaffRequirement;
+  
+  // Calculate total required for the period (daily requirement × number of days)
+  const totalRequiredForPeriod = dailyRequirement * daysInPeriod;
+  
+  // Calculate cumulative statistics for the entire period
+  let totalPresentCount = 0;
+  let totalAbsentCount = 0;
+  let totalWeeklyOffCount = 0;
+  let totalLeaveCount = 0;
+  
+  // Track daily counts for staff only (excluding managers/supervisors)
+  const dailyStats: { [date: string]: { present: number; absent: number; weeklyOff: number; leave: number; total: number } } = {};
+  
+  // Initialize daily stats for each date in the range
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const dateStr = formatDate(date);
+    dailyStats[dateStr] = { present: 0, absent: 0, weeklyOff: 0, leave: 0, total: 0 };
+  }
+  
+  // Count employees by status for each date - ONLY COUNT STAFF (not managers/supervisors)
+  employees.forEach(emp => {
+    // Skip managers and supervisors for staff requirement calculations
+    if (emp.isManager || emp.isSupervisor) return;
+    
+    const date = emp.date;
+    if (!dailyStats[date]) {
+      dailyStats[date] = { present: 0, absent: 0, weeklyOff: 0, leave: 0, total: 0 };
+    }
+    
+    dailyStats[date].total++;
+    
+    if (emp.status === 'present') {
+      totalPresentCount++;
+      dailyStats[date].present++;
+    } else if (emp.status === 'absent') {
+      totalAbsentCount++;
+      dailyStats[date].absent++;
+    } else if (emp.status === 'weekly-off') {
+      totalWeeklyOffCount++;
+      dailyStats[date].weeklyOff++;
+    } else if (emp.status === 'leave') {
+      totalLeaveCount++;
+      dailyStats[date].leave++;
+    }
+  });
+  
+  // Calculate cumulative totals for the period
+  const totalRequiredAttendance = totalRequiredForPeriod;
+  const totalPresentAttendance = totalPresentCount; // Present only (excluding weekly off for this calculation)
+  const totalPresentWithWeeklyOff = totalPresentCount + totalWeeklyOffCount; // Present including weekly off
+  const totalAbsentAttendance = totalAbsentCount + totalLeaveCount;
+  const periodShortage = totalAbsentAttendance;
+  
+  // For single day view
+  const singleDayPresent = Object.values(dailyStats)[0]?.present || 0;
+  const singleDayWeeklyOff = Object.values(dailyStats)[0]?.weeklyOff || 0;
+  const singleDayLeave = Object.values(dailyStats)[0]?.leave || 0;
+  const singleDayAbsent = Object.values(dailyStats)[0]?.absent || 0;
+  const singleDayTotalPresent = singleDayPresent + singleDayWeeklyOff;
+  const singleDayOnSiteRequirement = dailyRequirement - singleDayWeeklyOff;
   
   return {
     id: `${site._id}-${startDate}-${endDate}`,
+    siteId: `${site._id}-${startDate}-${endDate}`,
     name: site.name,
     siteName: site.name,
-    totalEmployees,
-    present: totalPresent,
-    weeklyOff: weeklyOffCount,
-    absent: absentCount,
-    shortage: absentCount * daysInPeriod,
+    dailyRequirement, // Daily staff requirement (excluding managers/supervisors)
+    totalEmployees: dailyRequirement,
+    
+    // Deployment stats
+    deploymentStats,
+    
+    // CUMULATIVE TOTALS FOR THE PERIOD
+    totalRequiredForPeriod, // Daily requirement × number of days
+    totalPresent: totalPresentCount, // Cumulative present count for the period
+    totalWeeklyOff: totalWeeklyOffCount, // Cumulative weekly off count for the period
+    totalLeave: totalLeaveCount, // Cumulative leave count for the period
+    totalAbsent: totalAbsentCount, // Cumulative absent count for the period
+    
+    // For backward compatibility
+    present: totalPresentCount + totalWeeklyOffCount, // Total present including weekly off
+    weeklyOff: totalWeeklyOffCount,
+    leave: totalLeaveCount,
+    absent: totalAbsentCount + totalLeaveCount, // Total absent including leave
+    shortage: periodShortage,
+    
     date: `${startDate} to ${endDate}`,
     daysInPeriod,
     totalRequiredAttendance,
-    totalPresentAttendance,
+    totalPresentAttendance: totalPresentWithWeeklyOff,
     periodShortage,
     startDate,
     endDate,
     
-    // New calculated fields for duration
-    durationTotalRequired,
-    durationWeeklyOff,
-    durationOnSiteRequirement,
-    durationPresent,
-    durationAbsent,
+    // Detailed counts
+    presentCount: totalPresentCount,
+    absentCount: totalAbsentCount,
+    weeklyOffCount: totalWeeklyOffCount,
+    leaveCount: totalLeaveCount,
     
-    // Daily averages for display
-    avgDailyTotalRequired: totalEmployees,
-    avgDailyWeeklyOff: weeklyOffCount,
-    avgDailyOnSiteRequirement: totalEmployees - weeklyOffCount,
-    avgDailyPresent: actualPresent,
-    avgDailyAbsent: absentCount,
+    // Duration totals (cumulative)
+    durationTotalRequired: totalRequiredForPeriod,
+    durationWeeklyOff: totalWeeklyOffCount,
+    durationOnSiteRequirement: totalRequiredForPeriod - totalWeeklyOffCount,
+    durationPresent: totalPresentCount,
+    durationAbsent: totalAbsentCount + totalLeaveCount,
+    
+    // Daily averages (for reference only)
+    avgDailyPresent: Math.round(totalPresentCount / daysInPeriod),
+    avgDailyAbsent: Math.round((totalAbsentCount + totalLeaveCount) / daysInPeriod),
+    avgDailyWeeklyOff: Math.round(totalWeeklyOffCount / daysInPeriod),
+    avgDailyLeave: Math.round(totalLeaveCount / daysInPeriod),
+    avgDailyTotalRequired: dailyRequirement,
+    avgDailyOnSiteRequirement: dailyRequirement - Math.round(totalWeeklyOffCount / daysInPeriod),
+    
+    // Daily stats
+    dailyStats,
     
     // Single day specific fields
-    singleDayActualPresent: actualPresent,
-    singleDayWeeklyOff: weeklyOffCount,
-    singleDayTotalPresent: totalPresent,
-    singleDayAbsent: absentCount,
-    singleDayShortage: absentCount,
-    singleDayOnSiteRequirement: totalEmployees - weeklyOffCount,
+    singleDayPresent,
+    singleDayWeeklyOff,
+    singleDayLeave,
+    singleDayAbsent,
+    singleDayTotalPresent,
+    singleDayShortage: singleDayAbsent + singleDayLeave,
+    singleDayOnSiteRequirement,
     
     // Employee data - ensure it's always an array
     employees: employees || [],
@@ -640,27 +945,69 @@ const calculateSiteAttendanceData = async (site: Site, startDate: string, endDat
     originalSite: site,
     
     // Real data flag
-    isRealData: employees.length > 0 && employees[0]?.employeeId?.startsWith?.('EMP') || false
+    isRealData: employees.length > 0 && employees[0]?.employeeId?.startsWith?.('DEMO') === false
   };
 };
 
-// Calculate department site data
+// Calculate department site data - MODIFIED TO SHOW CUMULATIVE TOTALS
 const calculateDepartmentSiteData = async (site: Site, startDate: string, endDate: string, department: string) => {
   const siteData = await calculateSiteAttendanceData(site, startDate, endDate);
+  
+  // Filter employees by department
+  const departmentEmployees = (siteData.employees || []).filter(emp => emp.department === department);
+  
+  // Calculate department-specific cumulative statistics (only counting staff)
+  let departmentPresent = 0;
+  let departmentAbsent = 0;
+  let departmentWeeklyOff = 0;
+  let departmentLeave = 0;
+  
+  departmentEmployees.forEach(emp => {
+    // Skip managers and supervisors for staff calculations
+    if (emp.isManager || emp.isSupervisor) return;
+    
+    if (emp.status === 'present') departmentPresent++;
+    else if (emp.status === 'absent') departmentAbsent++;
+    else if (emp.status === 'weekly-off') departmentWeeklyOff++;
+    else if (emp.status === 'leave') departmentLeave++;
+  });
+  
+  const departmentDailyRequirement = Math.round(departmentEmployees.filter(emp => !emp.isManager && !emp.isSupervisor).length / siteData.daysInPeriod); // Average employees per day
+  const departmentTotalRequired = departmentDailyRequirement * siteData.daysInPeriod;
   
   return {
     ...siteData,
     siteId: `${site._id}-${startDate}-${endDate}`,
-    total: siteService.getTotalStaff(site),
-    // Filter employees by department for department view, ensure it's an array
-    employees: (siteData.employees || []).filter(emp => emp.department === department)
+    dailyRequirement: departmentDailyRequirement,
+    totalEmployees: departmentDailyRequirement,
+    totalRequiredForPeriod: departmentTotalRequired,
+    
+    // Cumulative totals for department
+    totalPresent: departmentPresent,
+    totalWeeklyOff: departmentWeeklyOff,
+    totalLeave: departmentLeave,
+    totalAbsent: departmentAbsent,
+    
+    present: departmentPresent + departmentWeeklyOff,
+    weeklyOff: departmentWeeklyOff,
+    leave: departmentLeave,
+    absent: departmentAbsent + departmentLeave,
+    
+    employees: departmentEmployees,
+    
+    // Override duration totals for department
+    durationTotalRequired: departmentTotalRequired,
+    durationWeeklyOff: departmentWeeklyOff,
+    durationOnSiteRequirement: departmentTotalRequired - departmentWeeklyOff,
+    durationPresent: departmentPresent,
+    durationAbsent: departmentAbsent + departmentLeave
   };
 };
 
-// Get available departments
+// Get available departments - UNCHANGED
 const departments = departmentViewData.map(dept => dept.department);
 
-// Site Employee Details Page Component
+// Site Employee Details Page Component - MODIFIED TO HANDLE DATE RANGE PROPERLY
 interface SiteEmployeeDetailsProps {
   siteData: any;
   onBack: () => void;
@@ -685,21 +1032,90 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     );
   }
 
-  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'absent' | 'weekly-off'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'present' | 'absent' | 'weekly-off' | 'leave'>('all');
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [employees, setEmployees] = useState<Employee[]>(siteData?.employees || []); // Add optional chaining
+  const [selectedDate, setSelectedDate] = useState<string>(siteData.startDate || new Date().toISOString().split('T')[0]);
+  const [employees, setEmployees] = useState<Employee[]>(siteData?.employees || []);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [dailyView, setDailyView] = useState<boolean>(siteData.daysInPeriod === 1);
+  
+  // Get unique dates from employees
+  const availableDates = useMemo(() => {
+    const dates = new Set<string>();
+    employees.forEach(emp => {
+      if (emp.date) dates.add(emp.date);
+    });
+    return Array.from(dates).sort();
+  }, [employees]);
   
   // Update employees when siteData changes
   useEffect(() => {
     if (siteData?.employees) {
       setEmployees(siteData.employees || []);
+      if (siteData.daysInPeriod === 1) {
+        setDailyView(true);
+        setSelectedDate(siteData.startDate);
+      } else {
+        setDailyView(false);
+      }
     }
-  }, [siteData?.employees]); // Add optional chaining
+  }, [siteData?.employees, siteData?.daysInPeriod, siteData?.startDate]);
+  
+  // Filter employees by selected date when in daily view
+  const filteredEmployeesByDate = useMemo(() => {
+    if (dailyView && selectedDate) {
+      return employees.filter(emp => emp.date === selectedDate);
+    }
+    return employees;
+  }, [employees, dailyView, selectedDate]);
+
+  const allEmployees = filteredEmployeesByDate;
+  const presentEmployees = allEmployees.filter((emp: Employee) => emp.status === 'present');
+  const absentEmployees = allEmployees.filter((emp: Employee) => emp.status === 'absent');
+  const weeklyOffEmployees = allEmployees.filter((emp: Employee) => emp.status === 'weekly-off');
+  const leaveEmployees = allEmployees.filter((emp: Employee) => emp.status === 'leave');
+  const managersAndSupervisors = allEmployees.filter((emp: Employee) => emp.isManager || emp.isSupervisor);
+
+  const filteredEmployees = useMemo(() => {
+    let employees = [];
+    switch (activeTab) {
+      case 'present':
+        employees = presentEmployees;
+        break;
+      case 'absent':
+        employees = absentEmployees;
+        break;
+      case 'weekly-off':
+        employees = weeklyOffEmployees;
+        break;
+      case 'leave':
+        employees = leaveEmployees;
+        break;
+      default:
+        employees = allEmployees;
+    }
+
+    if (employeeSearch) {
+      employees = employees.filter((emp: Employee) =>
+        emp.name.toLowerCase().includes(employeeSearch.toLowerCase()) ||
+        (emp.employeeId && emp.employeeId.toLowerCase().includes(employeeSearch.toLowerCase())) ||
+        emp.department.toLowerCase().includes(employeeSearch.toLowerCase()) ||
+        (emp.email && emp.email.toLowerCase().includes(employeeSearch.toLowerCase()))
+      );
+    }
+
+    return employees;
+  }, [activeTab, employeeSearch, allEmployees, presentEmployees, absentEmployees, weeklyOffEmployees, leaveEmployees]);
 
   const itemsPerPage = 20;
+  const paginatedEmployees = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredEmployees.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredEmployees, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
 
   // Refresh employee data
   const refreshEmployeeData = async () => {
@@ -764,7 +1180,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       'Action Required',
       'Remarks',
       'Site',
-      'Date'
+      'Date',
+      'Role Type'
     ];
     
     const rows = filteredEmployees.map((emp: Employee) => [
@@ -772,7 +1189,7 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       `"${emp.name}"`,
       emp.department,
       emp.position,
-      emp.status === 'weekly-off' ? 'Weekly Off' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
+      emp.status === 'weekly-off' ? 'Weekly Off' : emp.status === 'leave' ? 'Leave' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
       emp.checkInTime || '-',
       emp.checkOutTime || '-',
       emp.email || '-',
@@ -785,7 +1202,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       emp.action === 'none' || !emp.action ? '-' : emp.action.charAt(0).toUpperCase() + emp.action.slice(1),
       `"${emp.remark || ''}"`,
       `"${emp.site}"`,
-      emp.date
+      emp.date,
+      emp.isManager ? 'Manager' : emp.isSupervisor ? 'Supervisor' : 'Staff'
     ]);
     
     const csvContent = [
@@ -807,49 +1225,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     toast.success(`Employee details exported successfully`);
   };
 
-  const allEmployees = employees;
-  const presentEmployees = allEmployees.filter((emp: Employee) => emp.status === 'present' || emp.status === 'weekly-off');
-  const absentEmployees = allEmployees.filter((emp: Employee) => emp.status === 'absent');
-  const weeklyOffEmployees = allEmployees.filter((emp: Employee) => emp.status === 'weekly-off');
-  const regularPresentEmployees = allEmployees.filter((emp: Employee) => emp.status === 'present');
-
-  const filteredEmployees = useMemo(() => {
-    let employees = [];
-    switch (activeTab) {
-      case 'present':
-        employees = presentEmployees;
-        break;
-      case 'absent':
-        employees = absentEmployees;
-        break;
-      case 'weekly-off':
-        employees = weeklyOffEmployees;
-        break;
-      default:
-        employees = allEmployees;
-    }
-
-    if (employeeSearch) {
-      employees = employees.filter((emp: Employee) =>
-        emp.name.toLowerCase().includes(employeeSearch.toLowerCase()) ||
-        (emp.employeeId && emp.employeeId.toLowerCase().includes(employeeSearch.toLowerCase())) ||
-        emp.department.toLowerCase().includes(employeeSearch.toLowerCase()) ||
-        (emp.email && emp.email.toLowerCase().includes(employeeSearch.toLowerCase()))
-      );
-    }
-
-    return employees;
-  }, [activeTab, employeeSearch, allEmployees, presentEmployees, absentEmployees, weeklyOffEmployees]);
-
-  const paginatedEmployees = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    return filteredEmployees.slice(startIndex, startIndex + itemsPerPage);
-  }, [filteredEmployees, currentPage, itemsPerPage]);
-
-  const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
-
+  // Handle export summary
   const handleExportEmployees = () => {
-    const headers = ['Employee ID', 'Name', 'Department', 'Position', 'Status', 'Check In', 'Check Out', 'Action', 'Remark', 'Site', 'Date'];
+    const headers = ['Employee ID', 'Name', 'Department', 'Position', 'Status', 'Check In', 'Check Out', 'Action', 'Remark', 'Site', 'Date', 'Role Type'];
     const csvContent = [
       headers.join(','),
       ...filteredEmployees.map((emp: Employee) => [
@@ -857,13 +1235,14 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
         `"${emp.name}"`,
         emp.department,
         emp.position,
-        emp.status === 'weekly-off' ? 'Weekly Off' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
+        emp.status === 'weekly-off' ? 'Weekly Off' : emp.status === 'leave' ? 'Leave' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
         emp.checkInTime || '-',
         emp.checkOutTime || '-',
         emp.action === 'none' || !emp.action ? '-' : emp.action,
         `"${emp.remark || ''}"`,
         `"${emp.site}"`,
-        emp.date
+        emp.date,
+        emp.isManager ? 'Manager' : emp.isSupervisor ? 'Supervisor' : 'Staff'
       ].join(','))
     ].join('\n');
 
@@ -939,21 +1318,21 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
         </div>
       </motion.div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards - Showing Cumulative Totals */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"
+        className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6"
       >
         <Card className="bg-blue-50 border-blue-200">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-blue-800">Total Employees</p>
-                <p className="text-2xl font-bold text-blue-600">{siteData.totalEmployees || siteData.total}</p>
+                <p className="text-sm font-medium text-blue-800">Daily Staff Requirement</p>
+                <p className="text-2xl font-bold text-blue-600">{siteData.dailyRequirement || 0}</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {allEmployees.length} records loaded
+                  Per day (excl. mgr/sup)
                 </p>
               </div>
               <div className="p-2 bg-blue-100 rounded-full">
@@ -963,22 +1342,35 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
           </CardContent>
         </Card>
 
-        {/* Show actual present for single day view */}
+        <Card className="bg-indigo-50 border-indigo-200">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-indigo-800">Total Required</p>
+                <p className="text-2xl font-bold text-indigo-600">
+                  {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  For {siteData.daysInPeriod} days
+                </p>
+              </div>
+              <div className="p-2 bg-indigo-100 rounded-full">
+                <Calendar className="h-6 w-6 text-indigo-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="bg-green-50 border-green-200">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-green-800">
-                  {siteData.daysInPeriod === 1 ? 'Today Actual Present' : 'Avg Daily Present'}
-                </p>
+                <p className="text-sm font-medium text-green-800">Total Present</p>
                 <p className="text-2xl font-bold text-green-600">
-                  {siteData.daysInPeriod === 1 
-                    ? (siteData.singleDayActualPresent || siteData.actualPresent || siteData.present)
-                    : (siteData.actualPresent || siteData.present)
-                  }
+                  {siteData.totalPresent || siteData.presentCount || 0}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {siteData.daysInPeriod === 1 ? 'Excluding weekly off' : 'Including weekly off'}
+                  Staff only
                 </p>
               </div>
               <div className="p-2 bg-green-100 rounded-full">
@@ -992,17 +1384,12 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-purple-800">
-                  {siteData.daysInPeriod === 1 ? 'Today Weekly Off' : 'Avg Weekly Off'}
-                </p>
+                <p className="text-sm font-medium text-purple-800">Total Weekly Off</p>
                 <p className="text-2xl font-bold text-purple-600">
-                  {siteData.daysInPeriod === 1
-                    ? (siteData.singleDayWeeklyOff || siteData.weeklyOff)
-                    : siteData.weeklyOff
-                  }
+                  {siteData.totalWeeklyOff || siteData.weeklyOffCount || 0}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {siteData.daysInPeriod === 1 ? 'Weekly off today' : 'Included in present count'}
+                  Staff only
                 </p>
               </div>
               <div className="p-2 bg-purple-100 rounded-full">
@@ -1012,21 +1399,35 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
           </CardContent>
         </Card>
 
+        <Card className="bg-orange-50 border-orange-200">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-orange-800">Total Leave</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {siteData.totalLeave || siteData.leaveCount || 0}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Staff only
+                </p>
+              </div>
+              <div className="p-2 bg-orange-100 rounded-full">
+                <Clock className="h-6 w-6 text-orange-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="bg-red-50 border-red-200">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-red-800">
-                  {siteData.daysInPeriod === 1 ? 'Today Shortage' : 'Total Shortage'}
-                </p>
+                <p className="text-sm font-medium text-red-800">Total Absent</p>
                 <p className="text-2xl font-bold text-red-600">
-                  {siteData.daysInPeriod === 1
-                    ? (siteData.singleDayShortage || siteData.shortage)
-                    : siteData.shortage
-                  }
+                  {siteData.totalAbsent || siteData.absentCount || 0}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  For {siteData.daysInPeriod} {siteData.daysInPeriod === 1 ? 'day' : 'days'}
+                  Staff only
                 </p>
               </div>
               <div className="p-2 bg-red-100 rounded-full">
@@ -1037,11 +1438,177 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
         </Card>
       </motion.div>
 
+      {/* Deployment Stats Cards */}
+      {siteData.deploymentStats && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"
+        >
+          <Card className="bg-amber-50 border-amber-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-amber-800">Managers</p>
+                  <p className="text-2xl font-bold text-amber-600">
+                    {siteData.deploymentStats.managerCount} / {siteData.deploymentStats.managerRequirement}
+                  </p>
+                </div>
+                <div className="p-2 bg-amber-100 rounded-full">
+                  <Shield className="h-6 w-6 text-amber-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-teal-50 border-teal-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-teal-800">Supervisors</p>
+                  <p className="text-2xl font-bold text-teal-600">
+                    {siteData.deploymentStats.supervisorCount} / {siteData.deploymentStats.supervisorRequirement}
+                  </p>
+                </div>
+                <div className="p-2 bg-teal-100 rounded-full">
+                  <ShieldCheck className="h-6 w-6 text-teal-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-cyan-50 border-cyan-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-cyan-800">Staff</p>
+                  <p className="text-2xl font-bold text-cyan-600">
+                    {siteData.deploymentStats.staffCount} / {siteData.deploymentStats.staffRequirement}
+                  </p>
+                </div>
+                <div className="p-2 bg-cyan-100 rounded-full">
+                  <Users className="h-6 w-6 text-cyan-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className={`${siteData.deploymentStats.isStaffFull ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className={`text-sm font-medium ${siteData.deploymentStats.isStaffFull ? 'text-red-800' : 'text-green-800'}`}>
+                    Remaining Staff
+                  </p>
+                  <p className={`text-2xl font-bold ${siteData.deploymentStats.isStaffFull ? 'text-red-600' : 'text-green-600'}`}>
+                    {siteData.deploymentStats.remainingStaff}
+                  </p>
+                </div>
+                <div className={`p-2 rounded-full ${siteData.deploymentStats.isStaffFull ? 'bg-red-100' : 'bg-green-100'}`}>
+                  {siteData.deploymentStats.isStaffFull ? (
+                    <XCircle className={`h-6 w-6 text-red-600`} />
+                  ) : (
+                    <CheckCircle className={`h-6 w-6 text-green-600`} />
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* Date Navigation for Multi-day View */}
+      {!dailyView && availableDates.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="mb-6"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="h-5 w-5 text-muted-foreground" />
+                  <span className="text-sm font-medium">View Daily Attendance:</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {availableDates.map(date => (
+                    <Button
+                      key={date}
+                      variant={selectedDate === date ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        setSelectedDate(date);
+                        setDailyView(true);
+                        setCurrentPage(1);
+                      }}
+                    >
+                      {formatDateDisplay(date)}
+                    </Button>
+                  ))}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setDailyView(false);
+                    setCurrentPage(1);
+                  }}
+                >
+                  Show Cumulative View
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* Daily View Indicator */}
+      {dailyView && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="mb-6"
+        >
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Calendar className="h-5 w-5 text-blue-600" />
+                  <div>
+                    <h3 className="font-medium text-blue-800">
+                      Viewing: {formatDateDisplay(selectedDate)}
+                    </h3>
+                    <p className="text-sm text-blue-700">
+                      Showing attendance data for this specific date
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDailyView(false);
+                    setCurrentPage(1);
+                  }}
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Show Cumulative View
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
       {/* Employee Data Source Info */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
+        transition={{ delay: 0.25 }}
         className="mb-6"
       >
         <Card className={siteData.isRealData ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"}>
@@ -1060,12 +1627,20 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                 </div>
                 <p className="text-sm text-gray-700">
                   {siteData.isRealData 
-                    ? `Loaded ${allEmployees.length} employees with real attendance data from ${siteData.startDate} to ${siteData.endDate}`
+                    ? `Loaded ${employees.length} employee records from ${siteData.startDate} to ${siteData.endDate}`
                     : 'Showing demo employee data. Real data will be shown when API connection is available.'
                   }
                 </p>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Click Refresh to update with latest attendance records
+                  {dailyView 
+                    ? `Showing ${allEmployees.length} employees for ${formatDateDisplay(selectedDate)}`
+                    : `Showing ${employees.length} total records across ${siteData.daysInPeriod} days (cumulative totals)`
+                  }
+                  {managersAndSupervisors.length > 0 && (
+                    <span className="ml-2 text-amber-600">
+                      • {managersAndSupervisors.length} managers/supervisors (excluded from staff counts)
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="flex flex-col gap-2">
@@ -1094,7 +1669,7 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.3 }}
         className="mb-6"
       >
         <Card className="bg-gray-50">
@@ -1103,35 +1678,35 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
               <h3 className="font-semibold mb-2">Period Attendance Calculation ({siteData.daysInPeriod} days):</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
                 <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Required Attendance</span>
+                  <span className="font-medium">Total Required Attendance (Staff Only)</span>
                   <div className="text-green-600 font-medium mt-1">
-                    = {siteData.totalEmployees || siteData.total} employees × {siteData.daysInPeriod} days
+                    = {siteData.dailyRequirement || 0} staff × {siteData.daysInPeriod} days
                   </div>
                   <div className="text-green-600 font-medium mt-1">
-                    = {siteData.totalRequiredAttendance}
+                    = {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
                   </div>
                 </div>
                 <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Present Attendance</span>
+                  <span className="font-medium">Total Present (Cumulative - Staff Only)</span>
                   <div className="text-blue-600 font-medium mt-1">
-                    = Sum of daily present counts
+                    = {siteData.totalPresent || siteData.presentCount || 0} present
                   </div>
                   <div className="text-blue-600 font-medium mt-1">
-                    = {siteData.totalPresentAttendance}
+                    Across {siteData.daysInPeriod} days
                   </div>
                 </div>
                 <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Shortage</span>
+                  <span className="font-medium">Total Shortage (Staff Only)</span>
                   <div className="text-red-600 font-medium mt-1">
-                    = Total Required - Total Present
+                    = {(siteData.totalAbsent || 0) + (siteData.totalLeave || 0)} absent + leave
                   </div>
                   <div className="text-red-600 font-medium mt-1">
-                    = {siteData.totalRequiredAttendance} - {siteData.totalPresentAttendance} = {siteData.shortage}
+                    = {siteData.periodShortage}
                   </div>
                 </div>
               </div>
               <p className="mt-2 text-muted-foreground">
-                <strong>Note:</strong> Weekly off employees are counted in present. Daily shortage = Total Employees - Daily Present Count
+                <strong>Note:</strong> All calculations above exclude managers and supervisors. Only staff positions count toward the requirement.
               </p>
             </div>
           </CardContent>
@@ -1142,7 +1717,7 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.25 }}
+        transition={{ delay: 0.35 }}
         className="mb-6"
       >
         <Card>
@@ -1184,6 +1759,17 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                   Weekly Off ({weeklyOffEmployees.length})
                 </Button>
                 <Button
+                  variant={activeTab === 'leave' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => {
+                    setActiveTab('leave');
+                    setCurrentPage(1);
+                  }}
+                  className="text-xs"
+                >
+                  Leave ({leaveEmployees.length})
+                </Button>
+                <Button
                   variant={activeTab === 'absent' ? 'default' : 'ghost'}
                   size="sm"
                   onClick={() => {
@@ -1218,14 +1804,14 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
+        transition={{ delay: 0.4 }}
       >
         <Card>
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <CardTitle>
                 Employee Details - {filteredEmployees.length} employees found
-                {siteData.daysInPeriod === 1 ? ' (Sample day)' : ` (${siteData.daysInPeriod} days)`}
+                {dailyView ? ` for ${formatDateDisplay(selectedDate)}` : ` across ${siteData.daysInPeriod} days (cumulative)`}
               </CardTitle>
               <div className="text-sm text-muted-foreground">
                 Showing {paginatedEmployees.length} of {filteredEmployees.length} filtered employees
@@ -1257,6 +1843,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                           Position
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                          Role Type
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Status
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
@@ -1264,6 +1853,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Check Out
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                          Date
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Action
@@ -1275,9 +1867,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                     </thead>
                     <tbody>
                       {paginatedEmployees.map((employee: Employee) => (
-                        <tr key={employee.id} className="border-b hover:bg-muted/50">
+                        <tr key={employee.id} className={`border-b hover:bg-muted/50 ${(employee.isManager || employee.isSupervisor) ? 'bg-amber-50/30' : ''}`}>
                           <td className="p-4 align-middle font-medium">
-                            <div className="font-mono text-xs">{employee.employeeId || employee.id}</div>
+                            <div className="font-mono text-xs">{employee.employeeId || employee.id.split('_')[0]}</div>
                             {employee.email && (
                               <div className="text-xs text-muted-foreground truncate max-w-[150px]">
                                 {employee.email}
@@ -1297,14 +1889,25 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                             {employee.position}
                           </td>
                           <td className="p-4 align-middle">
+                            {employee.isManager ? (
+                              <Badge className="bg-amber-100 text-amber-800 border-amber-200">Manager</Badge>
+                            ) : employee.isSupervisor ? (
+                              <Badge className="bg-teal-100 text-teal-800 border-teal-200">Supervisor</Badge>
+                            ) : (
+                              <Badge className="bg-cyan-100 text-cyan-800 border-cyan-200">Staff</Badge>
+                            )}
+                          </td>
+                          <td className="p-4 align-middle">
                             <Badge 
                               variant={
                                 employee.status === 'present' ? 'default' :
                                 employee.status === 'weekly-off' ? 'secondary' :
+                                employee.status === 'leave' ? 'outline' :
                                 'destructive'
                               }
                             >
                               {employee.status === 'weekly-off' ? 'Weekly Off' : 
+                               employee.status === 'leave' ? 'Leave' :
                                employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
                             </Badge>
                           </td>
@@ -1313,6 +1916,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
                           </td>
                           <td className="p-4 align-middle">
                             {employee.checkOutTime || '-'}
+                          </td>
+                          <td className="p-4 align-middle">
+                            {employee.date ? formatDateDisplay(employee.date) : '-'}
                           </td>
                           <td className="p-4 align-middle">
                             <Select 
@@ -1524,7 +2130,30 @@ const SuperAdminAttendanceView = () => {
       setDisplayData(sitesData.map(site => ({
         ...site,
         employees: [],
-        isRealData: false
+        isRealData: false,
+        daysInPeriod: calculateDaysBetween(startDate, endDate),
+        startDate,
+        endDate,
+        dailyRequirement: 0,
+        totalEmployees: 0,
+        totalRequiredForPeriod: 0,
+        totalPresent: 0,
+        totalWeeklyOff: 0,
+        totalLeave: 0,
+        totalAbsent: 0,
+        deploymentStats: {
+          totalStaff: 0,
+          managerCount: 0,
+          supervisorCount: 0,
+          staffCount: 0,
+          managerRequirement: site.managerCount || 0,
+          supervisorRequirement: site.supervisorCount || 0,
+          staffRequirement: 0,
+          dailyStaffRequirement: 0,
+          totalStaffRequirementForPeriod: 0,
+          isStaffFull: false,
+          remainingStaff: 0
+        }
       })));
     } finally {
       setRefreshing(false);
@@ -1534,7 +2163,7 @@ const SuperAdminAttendanceView = () => {
   // Initial data fetch
   useEffect(() => {
     fetchSitesData();
-  }, []); // Empty dependency array means this runs once on mount
+  }, []);
 
   // Recalculate data when filters change
   useEffect(() => {
@@ -1571,22 +2200,30 @@ const SuperAdminAttendanceView = () => {
         totalRequiredAttendance: 0,
         totalPresentAttendance: 0,
         totalShortage: 0,
-        attendanceRate: '0.0'
+        attendanceRate: '0.0',
+        totalManagers: 0,
+        totalSupervisors: 0,
+        totalStaff: 0
       };
     }
     
-    // Calculate duration totals
-    const durationTotalRequired = filteredData.reduce((sum, item) => sum + item.durationTotalRequired, 0);
-    const durationWeeklyOff = filteredData.reduce((sum, item) => sum + item.durationWeeklyOff, 0);
-    const durationOnSiteRequirement = filteredData.reduce((sum, item) => sum + item.durationOnSiteRequirement, 0);
-    const durationPresent = filteredData.reduce((sum, item) => sum + item.durationPresent, 0);
-    const durationAbsent = filteredData.reduce((sum, item) => sum + item.durationAbsent, 0);
+    // Calculate duration totals (cumulative)
+    const durationTotalRequired = filteredData.reduce((sum, item) => sum + (item.totalRequiredForPeriod || item.durationTotalRequired || 0), 0);
+    const durationWeeklyOff = filteredData.reduce((sum, item) => sum + (item.totalWeeklyOff || item.weeklyOffCount || 0), 0);
+    const durationOnSiteRequirement = filteredData.reduce((sum, item) => sum + (item.durationOnSiteRequirement || 0), 0);
+    const durationPresent = filteredData.reduce((sum, item) => sum + (item.totalPresent || item.presentCount || 0), 0);
+    const durationAbsent = filteredData.reduce((sum, item) => sum + (item.totalAbsent || 0) + (item.totalLeave || 0), 0);
+    
+    // Calculate deployment totals
+    const totalManagers = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.managerCount || 0), 0);
+    const totalSupervisors = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.supervisorCount || 0), 0);
+    const totalStaff = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.staffCount || 0), 0);
     
     // Existing calculations
-    const totalEmployees = filteredData.reduce((sum, item) => sum + (item.totalEmployees || item.total), 0);
-    const totalRequiredAttendance = filteredData.reduce((sum, item) => sum + item.totalRequiredAttendance, 0);
-    const totalPresentAttendance = filteredData.reduce((sum, item) => sum + item.totalPresentAttendance, 0);
-    const totalShortage = filteredData.reduce((sum, item) => sum + item.shortage, 0);
+    const totalEmployees = filteredData.reduce((sum, item) => sum + (item.dailyRequirement || item.totalEmployees || item.total), 0);
+    const totalRequiredAttendance = filteredData.reduce((sum, item) => sum + (item.totalRequiredForPeriod || item.totalRequiredAttendance || 0), 0);
+    const totalPresentAttendance = filteredData.reduce((sum, item) => sum + (item.totalPresentAttendance || 0), 0);
+    const totalShortage = filteredData.reduce((sum, item) => sum + (item.periodShortage || 0), 0);
     const attendanceRate = totalRequiredAttendance > 0 ? ((totalPresentAttendance / totalRequiredAttendance) * 100).toFixed(1) : '0.0';
     
     return {
@@ -1599,35 +2236,10 @@ const SuperAdminAttendanceView = () => {
       totalRequiredAttendance,
       totalPresentAttendance,
       totalShortage,
-      attendanceRate
-    };
-  }, [filteredData]);
-
-  // Calculate average daily values for the columns
-  const columnValues = useMemo(() => {
-    if (filteredData.length === 0) {
-      return {
-        avgTotalRequired: 0,
-        avgWeeklyOff: 0,
-        avgOnSiteRequirement: 0,
-        avgPresent: 0,
-        avgAbsent: 0
-      };
-    }
-    
-    // Use the pre-calculated daily averages from the data
-    const avgTotalRequired = Math.round(filteredData.reduce((sum, item) => sum + item.avgDailyTotalRequired, 0) / filteredData.length);
-    const avgWeeklyOff = Math.round(filteredData.reduce((sum, item) => sum + item.avgDailyWeeklyOff, 0) / filteredData.length);
-    const avgOnSiteRequirement = Math.round(filteredData.reduce((sum, item) => sum + item.avgDailyOnSiteRequirement, 0) / filteredData.length);
-    const avgPresent = Math.round(filteredData.reduce((sum, item) => sum + item.avgDailyPresent, 0) / filteredData.length);
-    const avgAbsent = Math.round(filteredData.reduce((sum, item) => sum + item.avgDailyAbsent, 0) / filteredData.length);
-    
-    return {
-      avgTotalRequired,
-      avgWeeklyOff,
-      avgOnSiteRequirement,
-      avgPresent,
-      avgAbsent
+      attendanceRate,
+      totalManagers,
+      totalSupervisors,
+      totalStaff
     };
   }, [filteredData]);
 
@@ -1644,8 +2256,8 @@ const SuperAdminAttendanceView = () => {
       return;
     }
 
-    // Original columns with duration calculations
-    const headers = ['Site Name', 'Department', 'Period', 'Days', 'Total Required', 'Weekly Off', 'On Site Requirement', 'Present', 'Absent/Shortage', 'Attendance Rate', 'Data Source'];
+    // Original columns with cumulative totals
+    const headers = ['Site Name', 'Department', 'Period', 'Days', 'Daily Staff Requirement', 'Total Required', 'Weekly Off (Staff)', 'On Site Requirement', 'Total Present (Staff)', 'Leave (Staff)', 'Absent (Staff)', 'Managers', 'Supervisors', 'Total Staff', 'Attendance Rate', 'Data Source'];
     const filename = viewType === 'department' 
       ? `Attendance_${selectedDepartment}_${startDate}_to_${endDate}.csv`
       : `Sitewise_Attendance_${startDate}_to_${endDate}.csv`;
@@ -1653,38 +2265,39 @@ const SuperAdminAttendanceView = () => {
     const csvContent = [
       headers.join(','),
       ...filteredData.map(item => {
-        const total = item.total || item.totalEmployees;
+        const dailyRequirement = item.dailyRequirement || 0;
+        const totalRequired = item.totalRequiredForPeriod || item.durationTotalRequired || (dailyRequirement * daysInPeriod);
         
-        // For multi-day view, show daily averages
-        let weeklyOff, onSiteRequirement, present, absent;
+        // Show cumulative totals for the period (staff only)
+        const weeklyOff = item.totalWeeklyOff || item.weeklyOffCount || 0;
+        const onSiteRequirement = totalRequired - weeklyOff;
+        const present = item.totalPresent || item.presentCount || 0;
+        const leave = item.totalLeave || item.leaveCount || 0;
+        const absent = item.totalAbsent || item.absentCount || 0;
         
-        if (daysInPeriod === 1) {
-          // Single day: use daily values
-          weeklyOff = item.singleDayWeeklyOff || item.weeklyOff;
-          onSiteRequirement = item.singleDayOnSiteRequirement || (total - weeklyOff);
-          present = item.singleDayActualPresent || (item.present - weeklyOff);
-          absent = item.singleDayAbsent || item.absent;
-        } else {
-          // Multi-day: show daily averages
-          weeklyOff = item.avgDailyWeeklyOff;
-          onSiteRequirement = item.avgDailyOnSiteRequirement;
-          present = item.avgDailyPresent;
-          absent = item.avgDailyAbsent;
-        }
+        // Deployment stats
+        const managers = item.deploymentStats?.managerCount || 0;
+        const supervisors = item.deploymentStats?.supervisorCount || 0;
+        const staff = item.deploymentStats?.staffCount || 0;
         
-        const rate = item.totalRequiredAttendance > 0 ? ((item.totalPresentAttendance / item.totalRequiredAttendance) * 100).toFixed(1) + '%' : '0.0%';
+        const rate = totalRequired > 0 ? (((present + weeklyOff) / totalRequired) * 100).toFixed(1) + '%' : '0.0%';
         const dataSource = item.isRealData ? 'Real Data' : 'Demo Data';
         
         return [
           `"${item.siteName || item.name}"`,
           `"${viewType === 'department' ? selectedDepartment : 'General'}"`,
-          `"${item.date}"`,
+          `"${item.startDate} to ${item.endDate}"`,
           item.daysInPeriod,
-          total,
+          dailyRequirement,
+          totalRequired,
           weeklyOff,
           onSiteRequirement,
           present,
+          leave,
           absent,
+          managers,
+          supervisors,
+          staff,
           rate,
           dataSource
         ].join(',');
@@ -1731,7 +2344,7 @@ const SuperAdminAttendanceView = () => {
 
   // Handle view details click
   const handleViewDetails = (siteData: any) => {
-    if (!siteData) return; // Add null check
+    if (!siteData) return;
     
     setSelectedSite(siteData);
     setShowSiteDetails(true);
@@ -1745,7 +2358,7 @@ const SuperAdminAttendanceView = () => {
     params.set('startDate', startDate);
     params.set('endDate', endDate);
     params.set('siteDetails', 'true');
-    params.set('selectedSiteId', siteData?.id || siteData?.siteId || ''); // Add optional chaining
+    params.set('selectedSiteId', siteData?.siteId || siteData?.id || '');
     
     navigate(`?${params.toString()}`, { replace: true });
   };
@@ -1940,7 +2553,7 @@ const SuperAdminAttendanceView = () => {
                 {viewType === 'department'
                   ? `Showing cumulative attendance data for ${selectedDepartment} department across ${sites.length} sites`
                   : `Showing cumulative attendance data for ${sites.length} sites`
-                } - {formatDateDisplay(startDate)} to {formatDateDisplay(endDate)} (${daysInPeriod} days)
+                } - {formatDateDisplay(startDate)} to {formatDateDisplay(endDate)} ({daysInPeriod} days)
                 {hasRealEmployeeData && (
                   <span className="ml-2 text-green-600 font-medium">
                     • Connected to Employee API
@@ -1981,7 +2594,7 @@ const SuperAdminAttendanceView = () => {
                   <div>
                     <h3 className="font-medium text-green-800">Employee API Connected</h3>
                     <p className="text-sm text-green-700">
-                      Real employee data is being fetched from the server. Click "View Details" to see employee check-in/check-out times.
+                      Real employee data is being fetched from the server for the selected date range. The table shows CUMULATIVE totals for the entire period, excluding managers and supervisors.
                     </p>
                   </div>
                 </div>
@@ -2096,7 +2709,7 @@ const SuperAdminAttendanceView = () => {
               <div className="flex items-center justify-center gap-3">
                 <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
                 <span className="text-sm text-muted-foreground">
-                  {refreshing ? 'Refreshing employee data...' : 'Loading data...'}
+                  {refreshing ? 'Refreshing employee data for selected date range...' : 'Loading data...'}
                 </span>
               </div>
             </CardContent>
@@ -2104,7 +2717,7 @@ const SuperAdminAttendanceView = () => {
         </div>
       )}
 
-      {/* Period Summary Cards */}
+      {/* Period Summary Cards - CUMULATIVE TOTALS */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -2114,9 +2727,9 @@ const SuperAdminAttendanceView = () => {
         <Card className="bg-gray-50">
           <CardContent className="p-6">
             <div className="text-sm">
-              <h3 className="font-semibold mb-2 text-lg">Duration-Based Calculations ({daysInPeriod} days):</h3>
+              <h3 className="font-semibold mb-2 text-lg">Cumulative Totals for {daysInPeriod} Days (Staff Only):</h3>
               
-              {/* Duration Calculations Summary */}
+              {/* Cumulative Totals Summary */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
                 <div className="bg-white p-3 rounded-lg border">
                   <div className="font-medium text-green-700">Total Required</div>
@@ -2124,17 +2737,17 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.durationTotalRequired.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Total Employees × {daysInPeriod} days
+                    = Daily Staff Req × {daysInPeriod} days
                   </div>
                 </div>
                 
                 <div className="bg-white p-3 rounded-lg border">
-                  <div className="font-medium text-purple-700">Weekly Off</div>
+                  <div className="font-medium text-purple-700">Total Weekly Off</div>
                   <div className="text-purple-600 font-medium mt-2 text-2xl">
                     {overallTotals.durationWeeklyOff.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Total weekly off for {daysInPeriod} days
+                    Cumulative for {daysInPeriod} days
                   </div>
                 </div>
                 
@@ -2144,27 +2757,49 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.durationOnSiteRequirement.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Total Required - Total Weekly Off
+                    Required - Weekly Off
                   </div>
                 </div>
                 
                 <div className="bg-white p-3 rounded-lg border">
-                  <div className="font-medium text-blue-700">Present</div>
+                  <div className="font-medium text-blue-700">Total Present</div>
                   <div className="text-blue-600 font-medium mt-2 text-2xl">
                     {overallTotals.durationPresent.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Total present for {daysInPeriod} days
+                    Cumulative for {daysInPeriod} days
                   </div>
                 </div>
                 
                 <div className="bg-white p-3 rounded-lg border">
-                  <div className="font-medium text-red-700">Absent</div>
+                  <div className="font-medium text-red-700">Total Absent</div>
                   <div className="text-red-600 font-medium mt-2 text-2xl">
                     {overallTotals.durationAbsent.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Total absent for {daysInPeriod} days
+                    Cumulative for {daysInPeriod} days
+                  </div>
+                </div>
+              </div>
+              
+              {/* Deployment Summary */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div className="bg-white p-3 rounded-lg border">
+                  <div className="font-medium text-amber-700">Total Managers</div>
+                  <div className="text-amber-600 font-medium mt-2 text-2xl">
+                    {overallTotals.totalManagers}
+                  </div>
+                </div>
+                <div className="bg-white p-3 rounded-lg border">
+                  <div className="font-medium text-teal-700">Total Supervisors</div>
+                  <div className="text-teal-600 font-medium mt-2 text-2xl">
+                    {overallTotals.totalSupervisors}
+                  </div>
+                </div>
+                <div className="bg-white p-3 rounded-lg border">
+                  <div className="font-medium text-cyan-700">Total Staff</div>
+                  <div className="text-cyan-600 font-medium mt-2 text-2xl">
+                    {overallTotals.totalStaff}
                   </div>
                 </div>
               </div>
@@ -2177,7 +2812,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.totalRequiredAttendance.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = {overallTotals.totalEmployees} employees × {daysInPeriod} days
+                    = {overallTotals.totalEmployees} staff × {daysInPeriod} days
                   </div>
                 </div>
                 <div className="bg-white p-3 rounded-lg border">
@@ -2186,7 +2821,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.totalPresentAttendance.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = Sum of daily present counts
+                    (Including weekly off)
                   </div>
                 </div>
                 <div className="bg-white p-3 rounded-lg border">
@@ -2201,119 +2836,11 @@ const SuperAdminAttendanceView = () => {
               </div>
               
               <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
-                <h4 className="font-medium text-yellow-800 mb-1">Calculation Rules for {daysInPeriod} days:</h4>
-                <ul className="list-disc pl-5 text-yellow-700 space-y-1">
-                  <li><strong>Total Required</strong> = Total Employees × Days in Period</li>
-                  <li><strong>Weekly Off</strong> = Sum of daily weekly off counts for the period</li>
-                  <li><strong>On Site Requirement</strong> = Total Required - Total Weekly Off</li>
-                  <li><strong>Present</strong> = Sum of daily present counts (excluding weekly off) for the period</li>
-                  <li><strong>Absent</strong> = Sum of daily absent counts for the period</li>
-                  <li><strong>Attendance Rate</strong> = (Total Present Attendance ÷ Total Required Attendance) × 100</li>
-                  <li><strong>Weekly off employees are counted in present attendance</strong></li>
-                </ul>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      {/* Daily Average Cards - Show what appears in the table */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6"
-      >
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-800">Total Required (Daily Avg)</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {columnValues.avgTotalRequired}
+                <h4 className="font-medium text-yellow-800 mb-1">Important Note:</h4>
+                <p className="text-yellow-700 text-sm">
+                  <strong>All calculations above exclude managers and supervisors.</strong> Only staff positions count toward the requirement.
+                  The table below shows CUMULATIVE totals for the entire {daysInPeriod}-day period, not daily averages.
                 </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Average daily total employees
-                </p>
-              </div>
-              <div className="p-2 bg-blue-100 rounded-full">
-                <Users className="h-6 w-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-purple-50 border-purple-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-purple-800">Weekly Off (Daily Avg)</p>
-                <p className="text-2xl font-bold text-purple-600">
-                  {columnValues.avgWeeklyOff}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Average daily weekly off
-                </p>
-              </div>
-              <div className="p-2 bg-purple-100 rounded-full">
-                <Calendar className="h-6 w-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-amber-50 border-amber-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-amber-800">On Site Requirement (Daily Avg)</p>
-                <p className="text-2xl font-bold text-amber-600">
-                  {columnValues.avgOnSiteRequirement}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Average daily on-site requirement
-                </p>
-              </div>
-              <div className="p-2 bg-amber-100 rounded-full">
-                <Building className="h-6 w-6 text-amber-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-green-50 border-green-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-green-800">Present (Daily Avg)</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {columnValues.avgPresent}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Average daily actual present
-                </p>
-              </div>
-              <div className="p-2 bg-green-100 rounded-full">
-                <UserCheck className="h-6 w-6 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-red-800">Absent (Daily Avg)</p>
-                <p className="text-2xl font-bold text-red-600">
-                  {columnValues.avgAbsent}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Average daily absent
-                </p>
-              </div>
-              <div className="p-2 bg-red-100 rounded-full">
-                <AlertCircle className="h-6 w-6 text-red-600" />
               </div>
             </div>
           </CardContent>
@@ -2332,8 +2859,8 @@ const SuperAdminAttendanceView = () => {
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="text-sm text-muted-foreground">
                 {viewType === 'department' 
-                  ? `Showing ${daysInPeriod === 1 ? 'single day' : 'daily average'} data for ${selectedDepartment} department from ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
-                  : `Showing ${daysInPeriod === 1 ? 'single day' : 'daily average'} data for ${filteredData.length} sites from ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
+                  ? `Showing cumulative totals for ${selectedDepartment} department from ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
+                  : `Showing cumulative totals for ${filteredData.length} sites from ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
                 }
                 {hasRealEmployeeData && (
                   <span className="ml-2 text-green-600">
@@ -2366,7 +2893,7 @@ const SuperAdminAttendanceView = () => {
         </Card>
       </motion.div>
 
-      {/* Data Table - Original Columns with Duration Calculations */}
+      {/* Data Table - Showing CUMULATIVE TOTALS */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -2377,8 +2904,8 @@ const SuperAdminAttendanceView = () => {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <CardTitle>
                 {viewType === 'department' 
-                  ? `${selectedDepartment} Sites Attendance - ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
-                  : `All Sites Attendance - ${formatDateDisplay(startDate)} to ${formatDateDisplay(endDate)} (${daysInPeriod} days)`
+                  ? `${selectedDepartment} Sites Attendance - Cumulative Totals (${daysInPeriod} days)`
+                  : `All Sites Attendance - Cumulative Totals (${daysInPeriod} days)`
                 }
               </CardTitle>
               <div className="text-sm text-muted-foreground">
@@ -2417,6 +2944,9 @@ const SuperAdminAttendanceView = () => {
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Department
                         </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-indigo-700 bg-indigo-50">
+                          Daily Staff Req
+                        </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-blue-700 bg-blue-50">
                           Total Required
                         </th>
@@ -2424,19 +2954,28 @@ const SuperAdminAttendanceView = () => {
                           Weekly Off
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-amber-700 bg-amber-50">
-                          On Site Requirement
+                          On Site Req
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-green-700 bg-green-50">
-                          Present
+                          Total Present
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-orange-700 bg-orange-50">
+                          Leave
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-red-700 bg-red-50">
-                          Absent/Shortage
+                          Absent
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-amber-700 bg-amber-50">
+                          Mgrs
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-teal-700 bg-teal-50">
+                          Sups
+                        </th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-cyan-700 bg-cyan-50">
+                          Staff
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Attendance Rate
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Data Source
+                          Rate
                         </th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Status
@@ -2448,26 +2987,22 @@ const SuperAdminAttendanceView = () => {
                     </thead>
                     <tbody>
                       {paginatedData.map((item, index) => {
-                        const total = item.total || item.totalEmployees;
+                        const dailyRequirement = item.dailyRequirement || 0;
+                        const totalRequired = item.totalRequiredForPeriod || item.durationTotalRequired || (dailyRequirement * daysInPeriod);
                         
-                        // For table display, show daily averages for multi-day, daily values for single day
-                        let weeklyOff, onSiteRequirement, present, absent;
+                        // CUMULATIVE TOTALS for the period (staff only)
+                        const weeklyOff = item.totalWeeklyOff || item.weeklyOffCount || 0;
+                        const onSiteRequirement = totalRequired - weeklyOff;
+                        const present = item.totalPresent || item.presentCount || 0;
+                        const leave = item.totalLeave || item.leaveCount || 0;
+                        const absent = item.totalAbsent || item.absentCount || 0;
                         
-                        if (daysInPeriod === 1) {
-                          // Single day: show actual daily values
-                          weeklyOff = item.singleDayWeeklyOff || item.weeklyOff;
-                          onSiteRequirement = item.singleDayOnSiteRequirement || (total - weeklyOff);
-                          present = item.singleDayActualPresent || (item.present - weeklyOff);
-                          absent = item.singleDayAbsent || item.absent;
-                        } else {
-                          // Multi-day: show daily averages
-                          weeklyOff = item.avgDailyWeeklyOff;
-                          onSiteRequirement = item.avgDailyOnSiteRequirement;
-                          present = item.avgDailyPresent;
-                          absent = item.avgDailyAbsent;
-                        }
+                        // Deployment stats
+                        const managers = item.deploymentStats?.managerCount || 0;
+                        const supervisors = item.deploymentStats?.supervisorCount || 0;
+                        const staff = item.deploymentStats?.staffCount || 0;
                         
-                        const rate = item.totalRequiredAttendance > 0 ? ((item.totalPresentAttendance / item.totalRequiredAttendance) * 100).toFixed(1) : '0.0';
+                        const rate = totalRequired > 0 ? (((present + weeklyOff) / totalRequired) * 100).toFixed(1) : '0.0';
                         const status = parseFloat(rate) >= 90 ? 'Excellent' :
                                       parseFloat(rate) >= 80 ? 'Good' :
                                       parseFloat(rate) >= 70 ? 'Average' : 'Poor';
@@ -2485,16 +3020,11 @@ const SuperAdminAttendanceView = () => {
                           : 'General';
 
                         return (
-                          <tr key={item.siteId || item.id} className="border-b hover:bg-muted/50">
+                          <tr key={item.siteId || item.id || index} className="border-b hover:bg-muted/50">
                             <td className="p-4 align-middle font-medium">
                               <div className="font-medium text-sm">{item.siteName || item.name}</div>
                               <div className="text-xs text-muted-foreground">
                                 {item.daysInPeriod} {item.daysInPeriod === 1 ? 'day' : 'days'}
-                                {daysInPeriod > 1 && (
-                                  <div className="text-blue-600 mt-1">
-                                    Total for period: {item.durationPresent.toLocaleString()} present
-                                  </div>
-                                )}
                               </div>
                             </td>
                             <td className="p-4 align-middle">
@@ -2503,66 +3033,77 @@ const SuperAdminAttendanceView = () => {
                               </Badge>
                             </td>
                             
-                            {/* Total Required - Show daily average for multi-day */}
-                            <td className="p-4 align-middle font-bold text-blue-700 bg-blue-50">
-                              {total}
-                              {daysInPeriod > 1 && (
-                                <div className="text-xs text-blue-600 mt-1">
-                                  × {daysInPeriod} days = {item.durationTotalRequired.toLocaleString()}
-                                </div>
-                              )}
+                            {/* Daily Staff Requirement */}
+                            <td className="p-4 align-middle font-bold text-indigo-700 bg-indigo-50">
+                              {dailyRequirement}
                             </td>
                             
-                            {/* Weekly Off - Show daily average for multi-day */}
+                            {/* Total Required - Daily Requirement × Days */}
+                            <td className="p-4 align-middle font-bold text-blue-700 bg-blue-50">
+                              {totalRequired}
+                              <div className="text-xs text-blue-600 mt-1">
+                                {dailyRequirement} × {daysInPeriod}
+                              </div>
+                            </td>
+                            
+                            {/* Weekly Off - CUMULATIVE */}
                             <td className="p-4 align-middle font-bold text-purple-700 bg-purple-50">
                               {weeklyOff}
-                              {daysInPeriod > 1 && (
-                                <div className="text-xs text-purple-600 mt-1">
-                                  Total: {item.durationWeeklyOff.toLocaleString()}
-                                </div>
-                              )}
+                              <div className="text-xs text-purple-600 mt-1">
+                                Over {daysInPeriod} days
+                              </div>
                             </td>
                             
-                            {/* On Site Requirement - Show daily average for multi-day */}
+                            {/* On Site Requirement - CUMULATIVE */}
                             <td className="p-4 align-middle font-bold text-amber-700 bg-amber-50">
-                              {onSiteRequirement}
-                              {daysInPeriod > 1 && (
-                                <div className="text-xs text-amber-600 mt-1">
-                                  Total: {item.durationOnSiteRequirement.toLocaleString()}
-                                </div>
-                              )}
+                              {onSiteRequirement.toLocaleString()}
+                              <div className="text-xs text-amber-600 mt-1">
+                                Req - WO
+                              </div>
                             </td>
                             
-                            {/* Present - Show daily average for multi-day */}
+                            {/* Total Present - CUMULATIVE */}
                             <td className="p-4 align-middle font-bold text-green-700 bg-green-50">
                               {present}
-                              {daysInPeriod > 1 && (
-                                <div className="text-xs text-green-600 mt-1">
-                                  Total: {item.durationPresent.toLocaleString()}
-                                </div>
-                              )}
+                              <div className="text-xs text-green-600 mt-1">
+                                Over {daysInPeriod} days
+                              </div>
                             </td>
                             
-                            {/* Absent/Shortage - Show daily average for multi-day */}
+                            {/* Leave - CUMULATIVE */}
+                            <td className="p-4 align-middle font-bold text-orange-700 bg-orange-50">
+                              {leave}
+                              <div className="text-xs text-orange-600 mt-1">
+                                Over {daysInPeriod} days
+                              </div>
+                            </td>
+                            
+                            {/* Absent - CUMULATIVE */}
                             <td className="p-4 align-middle font-bold text-red-700 bg-red-50">
                               {absent}
-                              {daysInPeriod > 1 && (
-                                <div className="text-xs text-red-600 mt-1">
-                                  Total: {item.durationAbsent.toLocaleString()}
-                                </div>
-                              )}
+                              <div className="text-xs text-red-600 mt-1">
+                                Over {daysInPeriod} days
+                              </div>
+                            </td>
+                            
+                            {/* Managers */}
+                            <td className="p-4 align-middle font-bold text-amber-700 bg-amber-50">
+                              {managers}
+                            </td>
+                            
+                            {/* Supervisors */}
+                            <td className="p-4 align-middle font-bold text-teal-700 bg-teal-50">
+                              {supervisors}
+                            </td>
+                            
+                            {/* Staff */}
+                            <td className="p-4 align-middle font-bold text-cyan-700 bg-cyan-50">
+                              {staff}
                             </td>
                             
                             {/* Attendance Rate */}
                             <td className="p-4 align-middle font-bold">
                               {rate}%
-                            </td>
-                            
-                            {/* Data Source */}
-                            <td className="p-4 align-middle">
-                              <Badge variant={item.isRealData ? "default" : "outline"}>
-                                {item.isRealData ? "Real Data" : "Demo Data"}
-                              </Badge>
                             </td>
                             
                             {/* Status */}

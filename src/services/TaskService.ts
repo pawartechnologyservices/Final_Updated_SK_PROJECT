@@ -1,5 +1,3 @@
-
-// Types
 export interface Site {
   _id: string;
   name: string;
@@ -8,6 +6,7 @@ export interface Site {
   status: string;
   managerCount?: number;
   supervisorCount?: number;
+  staffDeployment?: any[];
 }
 
 // Extended Site interface for sites with required counts
@@ -42,13 +41,20 @@ export interface HourlyUpdate {
   submittedBy: string;
 }
 
+export interface AssignedUser {
+  userId: string;
+  name: string;
+  role: 'manager' | 'supervisor' | 'employee';
+  assignedAt: string;
+  status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+}
+
 export interface Task {
   createdBy: string;
   _id: string;
   title: string;
   description: string;
-  assignedTo: string;
-  assignedToName: string;
+  assignedUsers: AssignedUser[]; // Changed from single assignee to array
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   deadline: string;
@@ -61,13 +67,14 @@ export interface Task {
   hourlyUpdates: HourlyUpdate[];
   createdAt: string;
   updatedAt: string;
+  assignedTo?: string; // For backward compatibility
+  assignedToName?: string; // For backward compatibility
 }
 
 export interface CreateTaskRequest {
   title: string;
   description: string;
-  assignedTo: string;
-  assignedToName: string;
+  assignedUsers: AssignedUser[]; // Changed from single assignee to array
   priority: 'high' | 'medium' | 'low';
   status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   deadline: string;
@@ -77,6 +84,8 @@ export interface CreateTaskRequest {
   clientName: string;
   taskType?: string;
   createdBy: string;
+  attachments?: Attachment[];
+  hourlyUpdates?: HourlyUpdate[];
 }
 
 export interface CreateMultipleTasksRequest {
@@ -84,13 +93,48 @@ export interface CreateMultipleTasksRequest {
   createdBy: string;
 }
 
+export interface UpdateTaskRequest {
+  title?: string;
+  description?: string;
+  assignedUsers?: AssignedUser[]; // Full replacement
+  addAssignees?: AssignedUser[];   // Add new assignees
+  removeAssignees?: string[];       // Remove by userId
+  replaceAssignee?: {               // Replace one with another
+    oldUserId: string;
+    newUser: AssignedUser;
+  };
+  priority?: 'high' | 'medium' | 'low';
+  status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+  deadline?: string;
+  dueDateTime?: string;
+  siteId?: string;
+  siteName?: string;
+  clientName?: string;
+  taskType?: string;
+  attachments?: Attachment[];
+}
+
 export interface UpdateTaskStatusRequest {
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+  userId?: string; // Optional: for updating individual user's status
 }
 
 export interface AddHourlyUpdateRequest {
   content: string;
   submittedBy: string;
+}
+
+export interface AddAssigneesRequest {
+  assignees: AssignedUser[];
+}
+
+export interface RemoveAssigneesRequest {
+  userIds: string[];
+}
+
+export interface ReplaceAssigneeRequest {
+  oldUserId: string;
+  newUser: AssignedUser;
 }
 
 export interface UploadAttachmentRequest {
@@ -106,6 +150,11 @@ export interface TaskStats {
   cancelledTasks: number;
   assigneeCount: number;
   siteCount: number;
+  tasksByRole?: Array<{
+    _id: string;
+    count: number;
+    uniqueUsers: string[];
+  }>;
 }
 
 const API_URL = `http://${window.location.hostname}:5001/api`;
@@ -224,24 +273,153 @@ class TaskService {
     }
   }
 
-  async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]> {
+ // In TaskService.ts, update the createMultipleTasks method (around line 278)
+
+async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]> {
+  try {
+    console.log('📝 CREATE MULTIPLE TASKS - Request:', JSON.stringify(tasksData, null, 2));
+    
+    const response = await fetch(`${API_URL}/tasks/multiple`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(tasksData),
+    });
+    
+    const responseText = await response.text();
+    console.log('📨 Response status:', response.status);
+    console.log('📨 Response body:', responseText);
+    
+    if (!response.ok) {
+      let errorData;
+      try {
+        errorData = JSON.parse(responseText);
+      } catch {
+        errorData = { message: responseText || `Failed to create tasks: ${response.status}` };
+      }
+      console.error('❌ Server error response:', errorData);
+      throw new Error(errorData.message || `Failed to create tasks: ${response.status}`);
+    }
+    
+    const result = JSON.parse(responseText);
+    console.log('✅ Tasks created successfully:', result);
+    return result.tasks || result;
+    
+  } catch (error) {
+    console.error('❌ Error creating multiple tasks:', error);
+    throw error;
+  }
+}
+
+  // UPDATE TASK - ENHANCED with all edit capabilities
+  async updateTask(taskId: string, updateData: UpdateTaskRequest): Promise<Task> {
     try {
-      const response = await fetch(`${API_URL}/tasks/multiple`, {
-        method: 'POST',
+      console.log(`🔄 Updating task ${taskId}:`, JSON.stringify(updateData, null, 2));
+      
+      const response = await fetch(`${API_URL}/tasks/${taskId}`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(tasksData),
+        body: JSON.stringify(updateData),
       });
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to create tasks: ${response.status}`);
+        throw new Error(errorData.message || `Failed to update task: ${response.status}`);
       }
       
-      return await response.json();
+      const result = await response.json();
+      console.log('✅ Task updated successfully:', result);
+      return result.task || result;
+      
     } catch (error) {
-      console.error('Error creating multiple tasks:', error);
+      console.error(`Error updating task ${taskId}:`, error);
+      throw error;
+    }
+  }
+
+  // Add assignees to existing task
+  async addAssigneesToTask(taskId: string, assignees: AssignedUser[]): Promise<Task> {
+    try {
+      console.log(`➕ Adding assignees to task ${taskId}:`, assignees);
+      
+      const response = await fetch(`${API_URL}/tasks/${taskId}/assignees`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assignees }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to add assignees: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('✅ Assignees added successfully:', result);
+      return result.task || result;
+      
+    } catch (error) {
+      console.error(`Error adding assignees to task ${taskId}:`, error);
+      throw error;
+    }
+  }
+
+  // Remove assignees from task
+  async removeAssigneesFromTask(taskId: string, userIds: string[]): Promise<Task> {
+    try {
+      console.log(`➖ Removing assignees from task ${taskId}:`, userIds);
+      
+      const response = await fetch(`${API_URL}/tasks/${taskId}/assignees`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userIds }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to remove assignees: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('✅ Assignees removed successfully:', result);
+      return result.task || result;
+      
+    } catch (error) {
+      console.error(`Error removing assignees from task ${taskId}:`, error);
+      throw error;
+    }
+  }
+
+  // Replace assignee in task
+  async replaceAssigneeInTask(taskId: string, oldUserId: string, newUser: AssignedUser): Promise<Task> {
+    try {
+      console.log(`🔄 Replacing assignee in task ${taskId}:`, { oldUserId, newUser });
+      
+      const response = await fetch(`${API_URL}/tasks/${taskId}/assignees/replace`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ oldUserId, newUser }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to replace assignee: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('✅ Assignee replaced successfully:', result);
+      return result.task || result;
+      
+    } catch (error) {
+      console.error(`Error replacing assignee in task ${taskId}:`, error);
       throw error;
     }
   }
@@ -310,6 +488,70 @@ class TaskService {
     } catch (error) {
       console.error(`Error fetching assignees by role ${role}:`, error);
       throw error;
+    }
+  }
+
+  // Get all assigned supervisors (supervisors who are already assigned to tasks)
+  async getAssignedSupervisors(): Promise<string[]> {
+    try {
+      const tasks = await this.getAllTasks();
+      
+      // Get unique supervisor IDs from assigned tasks
+      const assignedSupervisorIds = new Set<string>();
+      
+      tasks.forEach(task => {
+        task.assignedUsers.forEach(user => {
+          if (user.role === 'supervisor') {
+            assignedSupervisorIds.add(user.userId);
+          }
+        });
+      });
+      
+      return Array.from(assignedSupervisorIds);
+    } catch (error) {
+      console.error('Error getting assigned supervisors:', error);
+      return [];
+    }
+  }
+
+  // Get supervisors assigned to specific sites
+  async getSupervisorsBySite(): Promise<Map<string, Set<string>>> {
+    try {
+      const response = await fetch(`${API_URL}/tasks/supervisors-by-site`);
+      
+      if (!response.ok) {
+        // Fallback to manual calculation
+        const tasks = await this.getAllTasks();
+        
+        // Map siteId -> Set of supervisor IDs
+        const siteToSupervisors = new Map<string, Set<string>>();
+        
+        tasks.forEach(task => {
+          const supervisors = task.assignedUsers.filter(user => user.role === 'supervisor');
+          
+          supervisors.forEach(supervisor => {
+            if (!siteToSupervisors.has(task.siteId)) {
+              siteToSupervisors.set(task.siteId, new Set());
+            }
+            siteToSupervisors.get(task.siteId)!.add(supervisor.userId);
+          });
+        });
+        
+        return siteToSupervisors;
+      }
+      
+      const data = await response.json();
+      
+      // Convert plain object to Map
+      const siteToSupervisors = new Map<string, Set<string>>();
+      Object.entries(data).forEach(([siteId, supervisorIds]) => {
+        siteToSupervisors.set(siteId, new Set(supervisorIds as string[]));
+      });
+      
+      return siteToSupervisors;
+    } catch (error) {
+      console.error('Error getting supervisors by site:', error);
+      return new Map();
     }
   }
 
@@ -446,7 +688,7 @@ class TaskService {
   // Statistics
   async getTaskStatistics(): Promise<TaskStats> {
     try {
-      const response = await fetch(`${API_URL}/tasks/statistics`);
+      const response = await fetch(`${API_URL}/tasks/stats`);
       if (!response.ok) {
         throw new Error(`Failed to fetch task statistics: ${response.status}`);
       }
@@ -479,7 +721,9 @@ class TaskService {
           // If endpoint doesn't exist, fall back to filtering from all tasks
           console.log("Endpoint /tasks/assignee/:id not found, filtering from all tasks");
           const allTasks = await this.getAllTasks();
-          return allTasks.filter(task => task.assignedTo === assigneeId);
+          return allTasks.filter(task => 
+            task.assignedUsers.some(user => user.userId === assigneeId)
+          );
         }
         throw new Error(`Failed to fetch tasks by assignee: ${response.status}`);
       }
@@ -593,6 +837,50 @@ class TaskService {
       cancelled: 'destructive'
     };
     return colors[status] || 'default';
+  }
+
+  // Helper to get assigned user names as string
+  getAssignedUserNames(task: Task): string {
+    return task.assignedUsers.map(user => user.name).join(', ');
+  }
+
+  // Helper to get managers from task
+  getManagers(task: Task): AssignedUser[] {
+    return task.assignedUsers.filter(user => user.role === 'manager');
+  }
+
+  // Helper to get supervisors from task
+  getSupervisors(task: Task): AssignedUser[] {
+    return task.assignedUsers.filter(user => user.role === 'supervisor');
+  }
+
+  // Helper to check if specific user is assigned
+  isUserAssigned(task: Task, userId: string): boolean {
+    return task.assignedUsers.some(user => user.userId === userId);
+  }
+
+  // Helper to get user's individual status
+  getUserStatus(task: Task, userId: string): string | null {
+    const user = task.assignedUsers.find(u => u.userId === userId);
+    return user ? user.status : null;
+  }
+
+  // Helper to find missing roles for a site
+  findMissingRoles(task: Task, siteManagerCount: number, siteSupervisorCount: number): {
+    missingManagers: number;
+    missingSupervisors: number;
+    currentManagers: number;
+    currentSupervisors: number;
+  } {
+    const currentManagers = this.getManagers(task).length;
+    const currentSupervisors = this.getSupervisors(task).length;
+    
+    return {
+      missingManagers: Math.max(0, siteManagerCount - currentManagers),
+      missingSupervisors: Math.max(0, siteSupervisorCount - currentSupervisors),
+      currentManagers,
+      currentSupervisors
+    };
   }
 }
 

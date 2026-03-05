@@ -8,13 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar as CalendarIcon, Plus, Calendar, Download, Edit, Trash2, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { Calendar as CalendarIcon, Plus, Calendar, Download, Edit, Trash2, ChevronLeft, ChevronRight, Loader2, RefreshCw, User, UserCog, Clock, X, Check } from "lucide-react";
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, startOfWeek, endOfWeek, isSameMonth, isSameDay, addWeeks, subWeeks, addDays, isWithinInterval } from "date-fns";
 import { toast } from "sonner";
 import { FormField } from "./shared";
 import { cn } from "@/lib/utils";
 import { siteService, Site } from "@/services/SiteService";
-import { supervisorService, Supervisor } from "@/services/supervisorService";
 import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
@@ -36,6 +35,7 @@ interface RosterEntry {
   type: "daily" | "weekly" | "fortnightly" | "monthly";
   siteClient: string;
   supervisor: string;
+  manager: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -49,6 +49,42 @@ interface Employee {
   designation?: string;
   status: "active" | "inactive" | "left";
   siteName?: string;
+  assignedSites?: string[];
+}
+
+interface Task {
+  _id: string;
+  title: string;
+  description: string;
+  siteId: string;
+  siteName: string;
+  taskType: string;
+  priority: string;
+  assignedUsers: Array<{
+    userId: string;
+    name: string;
+    role: string;
+  }>;
+}
+
+interface Supervisor {
+  _id: string;
+  name: string;
+  email: string;
+  role: 'supervisor';
+  department?: string;
+  site?: string;
+  assignedSites?: string[];
+}
+
+interface Manager {
+  _id: string;
+  name: string;
+  email: string;
+  role: 'manager';
+  department?: string;
+  site?: string;
+  assignedSites?: string[];
 }
 
 const RosterSection = () => {
@@ -59,8 +95,10 @@ const RosterSection = () => {
   const [loadingData, setLoadingData] = useState({
     sites: true,
     supervisors: true,
+    managers: true,
     employees: true,
-    roster: true
+    roster: true,
+    tasks: true
   });
   
   // Date states for different roster types
@@ -70,7 +108,23 @@ const RosterSection = () => {
   // Data states
   const [sites, setSites] = useState<Site[]>([]);
   const [supervisors, setSupervisors] = useState<Supervisor[]>([]);
+  const [managers, setManagers] = useState<Manager[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  
+  // Filtered states based on selected site
+  const [filteredSupervisors, setFilteredSupervisors] = useState<Supervisor[]>([]);
+  const [filteredManagers, setFilteredManagers] = useState<Manager[]>([]);
+  const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>([]);
+  const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
+  
+  // Multi-select states for employees
+  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState("");
+  
+  // Time picker state
+  const [startTime, setStartTime] = useState("09:00");
+  const [endTime, setEndTime] = useState("17:00");
   
   // Form state
   const [newRosterEntry, setNewRosterEntry] = useState({
@@ -86,7 +140,8 @@ const RosterSection = () => {
     remark: "",
     type: "daily" as "daily" | "weekly" | "fortnightly" | "monthly",
     siteClient: "",
-    supervisor: ""
+    supervisor: "",
+    manager: ""
   });
 
   // Helper to create unique values for Select
@@ -97,8 +152,12 @@ const RosterSection = () => {
       return `${item._id}-${item.name || ''}-${item.clientName || ''}`;
     } else if (type === 'supervisor') {
       return `${item._id}-${item.name || ''}-${item.department || ''}`;
+    } else if (type === 'manager') {
+      return `${item._id}-${item.name || ''}-${item.department || ''}`;
     } else if (type === 'employee') {
       return `${item._id}-${item.name || ''}-${item.employeeId || ''}`;
+    } else if (type === 'task') {
+      return `${item._id}-${item.title || ''}`;
     }
     return item._id || "";
   };
@@ -111,14 +170,18 @@ const RosterSection = () => {
       return sites.find(site => createUniqueValue('site', site) === uniqueValue);
     } else if (type === 'supervisor') {
       return supervisors.find(sup => createUniqueValue('supervisor', sup) === uniqueValue);
+    } else if (type === 'manager') {
+      return managers.find(mgr => createUniqueValue('manager', mgr) === uniqueValue);
     } else if (type === 'employee') {
       return employees.find(emp => createUniqueValue('employee', emp) === uniqueValue);
+    } else if (type === 'task') {
+      return tasks.find(task => createUniqueValue('task', task) === uniqueValue);
     }
     return null;
   };
 
   // Get current value for Select components
-  const getCurrentSelectValue = (type: 'site' | 'supervisor' | 'employee') => {
+  const getCurrentSelectValue = (type: 'site' | 'supervisor' | 'manager' | 'employee' | 'task') => {
     if (type === 'site' && newRosterEntry.siteClient) {
       const site = sites.find(s => s.name === newRosterEntry.siteClient);
       return site ? createUniqueValue('site', site) : "";
@@ -129,9 +192,19 @@ const RosterSection = () => {
       return supervisor ? createUniqueValue('supervisor', supervisor) : "";
     }
     
+    if (type === 'manager' && newRosterEntry.manager) {
+      const manager = managers.find(m => m.name === newRosterEntry.manager);
+      return manager ? createUniqueValue('manager', manager) : "";
+    }
+    
     if (type === 'employee' && newRosterEntry.employeeId) {
       const employee = employees.find(e => e._id === newRosterEntry.employeeId);
       return employee ? createUniqueValue('employee', employee) : "";
+    }
+    
+    if (type === 'task' && newRosterEntry.assignedTask) {
+      const task = tasks.find(t => t.title === newRosterEntry.assignedTask);
+      return task ? task._id : "";
     }
     
     return "";
@@ -167,20 +240,43 @@ const RosterSection = () => {
     fetchRosterEntries();
   }, [selectedDate, selectedRoster]);
 
+  // Filter data when site changes
+  useEffect(() => {
+    if (newRosterEntry.siteClient) {
+      filterDataBySite(newRosterEntry.siteClient);
+    } else {
+      setFilteredSupervisors([]);
+      setFilteredManagers([]);
+      setFilteredEmployees([]);
+      setFilteredTasks([]);
+    }
+  }, [newRosterEntry.siteClient, supervisors, managers, employees, tasks]);
+
+  // Update shift timing when start or end time changes
+  useEffect(() => {
+    setNewRosterEntry(prev => ({
+      ...prev,
+      shiftTiming: `${startTime}-${endTime}`
+    }));
+  }, [startTime, endTime]);
+
   const fetchAllData = async () => {
     try {
       setLoadingData({
         sites: true,
         supervisors: true,
+        managers: true,
         employees: true,
-        roster: true
+        roster: true,
+        tasks: true
       });
 
       await Promise.all([
         fetchSites(),
-        fetchSupervisors(),
+        fetchSupervisorsAndManagers(),
         fetchEmployees(),
-        fetchRosterEntries()
+        fetchRosterEntries(),
+        fetchTasks()
       ]);
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -189,8 +285,10 @@ const RosterSection = () => {
       setLoadingData({
         sites: false,
         supervisors: false,
+        managers: false,
         employees: false,
-        roster: false
+        roster: false,
+        tasks: false
       });
     }
   };
@@ -198,7 +296,6 @@ const RosterSection = () => {
   const fetchSites = async () => {
     try {
       const data = await siteService.getAllSites();
-      // Ensure unique sites by ID
       const uniqueSites = Array.from(new Map(data.map(site => [site._id, site])).values());
       setSites(uniqueSites);
     } catch (error) {
@@ -207,17 +304,99 @@ const RosterSection = () => {
     }
   };
 
-  const fetchSupervisors = async () => {
+  const fetchSupervisorsAndManagers = async () => {
     try {
-      const data = await supervisorService.getAllSupervisors();
-      // Ensure unique supervisors by ID and filter active ones
-      const uniqueSupervisors = Array.from(
-        new Map(data.map(sup => [sup._id, sup])).values()
-      ).filter(sup => sup.isActive !== false);
+      const tasksResponse = await axios.get(`${API_URL}/tasks`);
+      const tasksData = Array.isArray(tasksResponse.data) ? tasksResponse.data : [];
+      
+      const supervisorMap = new Map<string, Supervisor>();
+      const managerMap = new Map<string, Manager>();
+      
+      tasksData.forEach((task: Task) => {
+        if (task.assignedUsers && Array.isArray(task.assignedUsers)) {
+          task.assignedUsers.forEach(user => {
+            if (user.role === 'supervisor') {
+              if (!supervisorMap.has(user.userId)) {
+                supervisorMap.set(user.userId, {
+                  _id: user.userId,
+                  name: user.name,
+                  email: '',
+                  role: 'supervisor',
+                  department: task.taskType || 'General',
+                  site: task.siteName,
+                  assignedSites: [task.siteId]
+                });
+              } else {
+                const existing = supervisorMap.get(user.userId);
+                if (existing && !existing.assignedSites?.includes(task.siteId)) {
+                  existing.assignedSites = [...(existing.assignedSites || []), task.siteId];
+                }
+              }
+            } else if (user.role === 'manager') {
+              if (!managerMap.has(user.userId)) {
+                managerMap.set(user.userId, {
+                  _id: user.userId,
+                  name: user.name,
+                  email: '',
+                  role: 'manager',
+                  department: task.taskType || 'General',
+                  site: task.siteName,
+                  assignedSites: [task.siteId]
+                });
+              } else {
+                const existing = managerMap.get(user.userId);
+                if (existing && !existing.assignedSites?.includes(task.siteId)) {
+                  existing.assignedSites = [...(existing.assignedSites || []), task.siteId];
+                }
+              }
+            }
+          });
+        }
+      });
+      
+      try {
+        const assigneesResponse = await axios.get(`${API_URL}/tasks/assignees`);
+        if (assigneesResponse.data && Array.isArray(assigneesResponse.data)) {
+          assigneesResponse.data.forEach((user: any) => {
+            if (user.role === 'supervisor' && !supervisorMap.has(user._id)) {
+              supervisorMap.set(user._id, {
+                _id: user._id,
+                name: user.name,
+                email: user.email || '',
+                role: 'supervisor',
+                department: user.department || 'General',
+                site: user.site,
+                assignedSites: user.assignedSites || []
+              });
+            } else if (user.role === 'manager' && !managerMap.has(user._id)) {
+              managerMap.set(user._id, {
+                _id: user._id,
+                name: user.name,
+                email: user.email || '',
+                role: 'manager',
+                department: user.department || 'General',
+                site: user.site,
+                assignedSites: user.assignedSites || []
+              });
+            }
+          });
+        }
+      } catch (error) {
+        console.log("No separate assignees endpoint, using tasks only");
+      }
+      
+      const uniqueSupervisors = Array.from(supervisorMap.values());
+      const uniqueManagers = Array.from(managerMap.values());
+      
       setSupervisors(uniqueSupervisors);
+      setManagers(uniqueManagers);
+      
+      console.log("Fetched supervisors from tasks:", uniqueSupervisors);
+      console.log("Fetched managers from tasks:", uniqueManagers);
+      
     } catch (error) {
-      console.error("Error fetching supervisors:", error);
-      toast.error("Failed to load supervisors");
+      console.error("Error fetching supervisors and managers:", error);
+      toast.error("Failed to load supervisors and managers");
     }
   };
 
@@ -225,8 +404,7 @@ const RosterSection = () => {
     try {
       const response = await axios.get(`${API_URL}/employees`);
       if (response.data.success) {
-        const employeesData = response.data.employees || [];
-        // Ensure unique employees by ID and filter active ones
+        const employeesData = response.data.data || [];
         const uniqueEmployees = Array.from(
           new Map(employeesData.map((emp: Employee) => [emp._id, emp])).values()
         ).filter(emp => emp.status === "active");
@@ -240,11 +418,23 @@ const RosterSection = () => {
     }
   };
 
+  const fetchTasks = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/tasks`);
+      if (response.data) {
+        const tasksData = Array.isArray(response.data) ? response.data : [];
+        setTasks(tasksData);
+      }
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+      toast.error("Failed to load tasks");
+    }
+  };
+
   const fetchRosterEntries = async () => {
     try {
       setLoadingData(prev => ({ ...prev, roster: true }));
       
-      // Fetch ALL roster entries for the selected date range
       const dateRange = getDateRange();
       const params = new URLSearchParams({
         startDate: format(dateRange.start, "yyyy-MM-dd"),
@@ -267,7 +457,42 @@ const RosterSection = () => {
     }
   };
 
-  // Calculate date ranges based on roster type
+  const filterDataBySite = (siteName: string) => {
+    const selectedSite = sites.find(site => site.name === siteName);
+    
+    if (!selectedSite) {
+      setFilteredSupervisors([]);
+      setFilteredManagers([]);
+      setFilteredEmployees([]);
+      setFilteredTasks([]);
+      return;
+    }
+
+    const siteSupervisors = supervisors.filter(sup => 
+      sup.assignedSites?.includes(selectedSite._id) || 
+      sup.site === siteName
+    );
+    setFilteredSupervisors(siteSupervisors);
+
+    const siteManagers = managers.filter(mgr => 
+      mgr.assignedSites?.includes(selectedSite._id) || 
+      mgr.site === siteName
+    );
+    setFilteredManagers(siteManagers);
+
+    const siteEmployees = employees.filter(emp => 
+      emp.siteName === siteName || 
+      emp.assignedSites?.includes(selectedSite._id)
+    );
+    setFilteredEmployees(siteEmployees);
+
+    const siteTasks = tasks.filter(task => 
+      task.siteName === siteName || 
+      task.siteId === selectedSite._id
+    );
+    setFilteredTasks(siteTasks);
+  };
+
   const getDateRange = () => {
     switch (selectedRoster) {
       case "daily":
@@ -277,7 +502,7 @@ const RosterSection = () => {
           label: format(selectedDate, "dd MMMM yyyy")
         };
       case "weekly":
-        const weekStartDate = startOfWeek(selectedDate, { weekStartsOn: 1 }); // Monday
+        const weekStartDate = startOfWeek(selectedDate, { weekStartsOn: 1 });
         const weekEndDate = endOfWeek(selectedDate, { weekStartsOn: 1 });
         return {
           start: weekStartDate,
@@ -286,7 +511,7 @@ const RosterSection = () => {
         };
       case "fortnightly":
         const fortnightStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
-        const fortnightEnd = addDays(fortnightStart, 13); // 14 days total
+        const fortnightEnd = addDays(fortnightStart, 13);
         return {
           start: fortnightStart,
           end: fortnightEnd,
@@ -311,7 +536,6 @@ const RosterSection = () => {
 
   const dateRange = getDateRange();
 
-  // Get days for calendar view
   const getDaysInRange = () => {
     if (selectedRoster === "monthly") {
       const start = startOfMonth(dateRange.start);
@@ -335,77 +559,144 @@ const RosterSection = () => {
     setLoading(true);
 
     try {
-      // Validate required fields
-      const requiredFields = [
-        "date",
-        "employeeName",
-        "employeeId",
-        "department",
-        "designation",
-        "shift",
-        "shiftTiming",
-        "assignedTask",
-        "hours",
-        "siteClient",
-        "supervisor",
-      ];
-
-      const missingFields = requiredFields.filter(field => !newRosterEntry[field as keyof typeof newRosterEntry]);
-
-      if (missingFields.length > 0) {
-        toast.error(`Missing required fields: ${missingFields.join(", ")}`);
-        return;
-      }
-
-      // Validate hours
-      if (newRosterEntry.hours <= 0 || newRosterEntry.hours > 24) {
-        toast.error("Hours must be between 0 and 24");
-        return;
-      }
-
-      // Check for duplicate entry locally
-      if (checkDuplicateEntry(newRosterEntry.employeeId, newRosterEntry.date, newRosterEntry.shift)) {
-        toast.error("Roster entry already exists for this employee on selected date and shift");
-        return;
-      }
-
-      const response = await axios.post(`${API_URL}/roster`, {
-        ...newRosterEntry,
-        type: selectedRoster
-      });
-
-      if (response.data.success) {
-        toast.success("Roster entry created successfully!");
+      // If multiple employees selected, create multiple entries
+      if (selectedEmployees.length > 0) {
+        const entries = [];
         
-        // Add the new entry to local state immediately
-        const newEntry = response.data.roster;
-        setRoster(prev => {
-          // Check if entry already exists to avoid duplicates
-          const exists = prev.some(entry => 
-            entry._id === newEntry._id || 
-            (entry.employeeId === newEntry.employeeId && 
-             entry.date === newEntry.date && 
-             entry.shift === newEntry.shift)
-          );
+        for (const employeeId of selectedEmployees) {
+          const employee = employees.find(e => e._id === employeeId);
+          if (!employee) continue;
           
-          if (exists) {
-            return prev.map(entry => entry._id === newEntry._id ? newEntry : entry);
+          const entryData = {
+            date: newRosterEntry.date,
+            employeeName: employee.name,
+            employeeId: employee._id,
+            department: employee.department || employee.position || "",
+            designation: employee.designation || employee.position || "",
+            shift: newRosterEntry.shift,
+            shiftTiming: newRosterEntry.shiftTiming,
+            assignedTask: newRosterEntry.assignedTask,
+            hours: newRosterEntry.hours,
+            remark: newRosterEntry.remark,
+            type: selectedRoster,
+            siteClient: newRosterEntry.siteClient,
+            supervisor: newRosterEntry.supervisor,
+            manager: newRosterEntry.manager
+          };
+          
+          entries.push(entryData);
+        }
+        
+        try {
+          // Try bulk endpoint first
+          const response = await axios.post(`${API_URL}/roster/bulk`, { entries });
+          
+          if (response.data.success) {
+            toast.success(`${response.data.created || entries.length} roster entries created successfully!`);
+            await fetchRosterEntries();
+            setAddEntryDialogOpen(false);
+            resetForm();
+            setSelectedEmployees([]);
+          } else {
+            throw new Error(response.data.message || "Failed to create roster entries");
+          }
+        } catch (bulkError) {
+          console.log("Bulk endpoint failed, falling back to individual creation");
+          // If bulk fails, create entries one by one
+          const createdEntries = [];
+          for (const entry of entries) {
+            try {
+              const singleResponse = await axios.post(`${API_URL}/roster`, entry);
+              if (singleResponse.data.success) {
+                createdEntries.push(singleResponse.data.roster);
+              }
+            } catch (singleError) {
+              console.error("Error creating single entry:", singleError);
+            }
           }
           
-          return [newEntry, ...prev];
-        });
-        
-        setAddEntryDialogOpen(false);
-        resetForm();
-        
-        // If the new entry is within current date range, show success message
-        if (isDateInCurrentRange(newEntry.date)) {
-          toast.success("Entry added and displayed in current view");
-        } else {
-          toast.info("Entry created. Change date range to view it.");
+          if (createdEntries.length > 0) {
+            toast.success(`${createdEntries.length} roster entries created successfully!`);
+            await fetchRosterEntries();
+            setAddEntryDialogOpen(false);
+            resetForm();
+            setSelectedEmployees([]);
+          } else {
+            throw new Error("Failed to create any entries");
+          }
         }
       } else {
-        throw new Error(response.data.message || "Failed to create roster entry");
+        // Single entry creation
+        const requiredFields = [
+          "date",
+          "employeeName",
+          "employeeId",
+          "department",
+          "designation",
+          "shift",
+          "shiftTiming",
+          "assignedTask",
+          "hours",
+          "siteClient",
+          "supervisor",
+          "manager"
+        ];
+
+        const missingFields = requiredFields.filter(field => !newRosterEntry[field as keyof typeof newRosterEntry]);
+
+        if (missingFields.length > 0) {
+          toast.error(`Missing required fields: ${missingFields.join(", ")}`);
+          setLoading(false);
+          return;
+        }
+
+        if (newRosterEntry.hours <= 0 || newRosterEntry.hours > 24) {
+          toast.error("Hours must be between 0 and 24");
+          setLoading(false);
+          return;
+        }
+
+        if (checkDuplicateEntry(newRosterEntry.employeeId, newRosterEntry.date, newRosterEntry.shift)) {
+          toast.error("Roster entry already exists for this employee on selected date and shift");
+          setLoading(false);
+          return;
+        }
+
+        const response = await axios.post(`${API_URL}/roster`, {
+          ...newRosterEntry,
+          type: selectedRoster
+        });
+
+        if (response.data.success) {
+          toast.success("Roster entry created successfully!");
+          
+          const newEntry = response.data.roster;
+          setRoster(prev => {
+            const exists = prev.some(entry => 
+              entry._id === newEntry._id || 
+              (entry.employeeId === newEntry.employeeId && 
+               entry.date === newEntry.date && 
+               entry.shift === newEntry.shift)
+            );
+            
+            if (exists) {
+              return prev.map(entry => entry._id === newEntry._id ? newEntry : entry);
+            }
+            
+            return [newEntry, ...prev];
+          });
+          
+          setAddEntryDialogOpen(false);
+          resetForm();
+          
+          if (isDateInCurrentRange(newEntry.date)) {
+            toast.success("Entry added and displayed in current view");
+          } else {
+            toast.info("Entry created. Change date range to view it.");
+          }
+        } else {
+          throw new Error(response.data.message || "Failed to create roster entry");
+        }
       }
     } catch (error: any) {
       console.error("Error creating roster:", error);
@@ -427,7 +718,6 @@ const RosterSection = () => {
       
       if (response.data.success) {
         toast.success("Roster entry deleted successfully!");
-        // Remove from local state
         setRoster(prev => prev.filter(entry => entry.id !== rosterId && entry._id !== rosterId));
       } else {
         throw new Error(response.data.message || "Failed to delete roster entry");
@@ -444,7 +734,6 @@ const RosterSection = () => {
       
       if (response.data.success) {
         toast.success("Roster entry updated successfully!");
-        // Update in local state
         setRoster(prev => prev.map(entry => 
           (entry.id === rosterId || entry._id === rosterId) ? response.data.roster : entry
         ));
@@ -472,23 +761,34 @@ const RosterSection = () => {
       remark: "",
       type: "daily",
       siteClient: "",
-      supervisor: ""
+      supervisor: "",
+      manager: ""
     });
+    setSelectedEmployees([]);
+    setStartTime("09:00");
+    setEndTime("17:00");
+    setEmployeeSearchQuery("");
   };
 
-  // Handle site selection
   const handleSiteSelect = (uniqueValue: string) => {
     const selectedSite = findItemByUniqueValue('site', uniqueValue);
     
     if (selectedSite) {
       setNewRosterEntry(prev => ({ 
         ...prev, 
-        siteClient: selectedSite.name 
+        siteClient: selectedSite.name,
+        supervisor: "",
+        manager: "",
+        employeeId: "",
+        employeeName: "",
+        department: "",
+        designation: "",
+        assignedTask: ""
       }));
+      setSelectedEmployees([]);
     }
   };
 
-  // Handle supervisor selection
   const handleSupervisorSelect = (uniqueValue: string) => {
     const selectedSupervisor = findItemByUniqueValue('supervisor', uniqueValue);
     
@@ -500,22 +800,94 @@ const RosterSection = () => {
     }
   };
 
-  // Handle employee selection
-  const handleEmployeeSelect = (uniqueValue: string) => {
-    const selectedEmployee = findItemByUniqueValue('employee', uniqueValue);
+  const handleManagerSelect = (uniqueValue: string) => {
+    const selectedManager = findItemByUniqueValue('manager', uniqueValue);
     
-    if (selectedEmployee) {
-      setNewRosterEntry(prev => ({
-        ...prev,
-        employeeId: selectedEmployee._id,
-        employeeName: selectedEmployee.name,
-        department: selectedEmployee.department || selectedEmployee.position || "",
-        designation: selectedEmployee.designation || selectedEmployee.position || ""
+    if (selectedManager) {
+      setNewRosterEntry(prev => ({ 
+        ...prev, 
+        manager: selectedManager.name 
       }));
     }
   };
 
-  // Filter roster by date range for display
+  const handleEmployeeToggle = (employeeId: string) => {
+    setSelectedEmployees(prev => {
+      if (prev.includes(employeeId)) {
+        return prev.filter(id => id !== employeeId);
+      } else {
+        return [...prev, employeeId];
+      }
+    });
+    
+    const employee = employees.find(e => e._id === employeeId);
+    if (employee && selectedEmployees.length === 0) {
+      setNewRosterEntry(prev => ({
+        ...prev,
+        employeeId: employee._id,
+        employeeName: employee.name,
+        department: employee.department || employee.position || "",
+        designation: employee.designation || employee.position || ""
+      }));
+    } else if (selectedEmployees.length === 1) {
+      setNewRosterEntry(prev => ({
+        ...prev,
+        employeeId: "",
+        employeeName: "",
+        department: "",
+        designation: ""
+      }));
+    }
+  };
+
+  // FIXED: Handle task selection
+  const handleTaskSelect = (value: string) => {
+    console.log("Task selected with value:", value);
+    
+    if (value === "no-tasks") return;
+    
+    const selectedTask = tasks.find(task => task._id === value);
+    
+    if (selectedTask) {
+      console.log("Found task:", selectedTask);
+      setNewRosterEntry(prev => ({ 
+        ...prev, 
+        assignedTask: selectedTask.title 
+      }));
+      
+      if (!prev.supervisor || !prev.manager) {
+        const taskSupervisor = selectedTask.assignedUsers?.find(u => u.role === 'supervisor');
+        const taskManager = selectedTask.assignedUsers?.find(u => u.role === 'manager');
+        
+        if (taskSupervisor && !prev.supervisor) {
+          const supervisor = supervisors.find(s => s._id === taskSupervisor.userId);
+          if (supervisor) {
+            setNewRosterEntry(prev => ({ 
+              ...prev, 
+              supervisor: supervisor.name 
+            }));
+          }
+        }
+        
+        if (taskManager && !prev.manager) {
+          const manager = managers.find(m => m._id === taskManager.userId);
+          if (manager) {
+            setNewRosterEntry(prev => ({ 
+              ...prev, 
+              manager: manager.name 
+            }));
+          }
+        }
+      }
+    }
+  };
+
+  const filteredEmployeesBySearch = filteredEmployees.filter(emp => 
+    emp.name.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+    emp.employeeId.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+    (emp.position && emp.position.toLowerCase().includes(employeeSearchQuery.toLowerCase()))
+  );
+
   const filteredRoster = roster.filter(entry => {
     const entryDate = new Date(entry.date);
     return entryDate >= dateRange.start && entryDate <= dateRange.end;
@@ -523,7 +895,6 @@ const RosterSection = () => {
 
   const handleExportReport = () => {
     toast.success(`Exporting ${selectedRoster} roster report for ${dateRange.label}...`);
-    // Implement export functionality here
   };
 
   const navigateDate = (direction: "prev" | "next") => {
@@ -543,7 +914,6 @@ const RosterSection = () => {
     }
   };
 
-  // Group roster by date for calendar view
   const groupedRoster = filteredRoster.reduce((acc, entry) => {
     const date = entry.date;
     if (!acc[date]) {
@@ -553,7 +923,6 @@ const RosterSection = () => {
     return acc;
   }, {} as Record<string, RosterEntry[]>);
 
-  // Daily Roster Table Component
   const DailyRosterTable = ({ roster, onDelete, onUpdate }: { 
     roster: RosterEntry[], 
     onDelete: (id: string) => void,
@@ -571,7 +940,8 @@ const RosterSection = () => {
         hours: entry.hours,
         remark: entry.remark,
         siteClient: entry.siteClient,
-        supervisor: entry.supervisor
+        supervisor: entry.supervisor,
+        manager: entry.manager
       });
     };
 
@@ -612,6 +982,7 @@ const RosterSection = () => {
               <TableHead>Hours</TableHead>
               <TableHead>Site/Client</TableHead>
               <TableHead>Supervisor</TableHead>
+              <TableHead>Manager</TableHead>
               <TableHead>Remarks</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -619,7 +990,7 @@ const RosterSection = () => {
           <TableBody>
             {loadingData.roster ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8">
+                <TableCell colSpan={13} className="text-center py-8">
                   <div className="flex items-center justify-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Loading roster entries...
@@ -628,7 +999,7 @@ const RosterSection = () => {
               </TableRow>
             ) : roster.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={13} className="text-center py-8 text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <Calendar className="h-8 w-8" />
                     <div>No roster entries found for selected period</div>
@@ -646,23 +1017,37 @@ const RosterSection = () => {
                   <TableCell>{entry.designation}</TableCell>
                   <TableCell>
                     {editingId === entry.id ? (
-                      <Input
-                        value={editForm.shiftTiming || ""}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, shiftTiming: e.target.value }))}
-                        placeholder="e.g., 09:00-17:00"
-                        className="w-32"
-                      />
+                      <div className="flex gap-1 items-center">
+                        <Input
+                          value={editForm.shiftTiming || ""}
+                          onChange={(e) => setEditForm(prev => ({ ...prev, shiftTiming: e.target.value }))}
+                          placeholder="HH:MM-HH:MM"
+                          className="w-32"
+                        />
+                      </div>
                     ) : (
                       entry.shiftTiming
                     )}
                   </TableCell>
                   <TableCell>
                     {editingId === entry.id ? (
-                      <Input
+                      <Select
                         value={editForm.assignedTask || ""}
-                        onChange={(e) => setEditForm(prev => ({ ...prev, assignedTask: e.target.value }))}
-                        placeholder="Assigned task"
-                      />
+                        onValueChange={(value) => setEditForm(prev => ({ ...prev, assignedTask: value }))}
+                      >
+                        <SelectTrigger className="w-40">
+                          <SelectValue placeholder="Select task" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tasks
+                            .filter(task => task.siteName === entry.siteClient)
+                            .map(task => (
+                              <SelectItem key={task._id} value={task.title}>
+                                {task.title}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
                     ) : (
                       entry.assignedTask
                     )}
@@ -718,18 +1103,46 @@ const RosterSection = () => {
                           <SelectValue placeholder="Select supervisor" />
                         </SelectTrigger>
                         <SelectContent>
-                          {supervisors.map(sup => (
-                            <SelectItem 
-                              key={sup._id} 
-                              value={sup.name}
-                            >
-                              {sup.name} - {sup.department}
-                            </SelectItem>
-                          ))}
+                          {supervisors
+                            .filter(sup => 
+                              sup.assignedSites?.includes(sites.find(s => s.name === entry.siteClient)?._id || '') ||
+                              sup.site === entry.siteClient
+                            )
+                            .map(sup => (
+                              <SelectItem key={sup._id} value={sup.name}>
+                                {sup.name} - {sup.department}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     ) : (
                       entry.supervisor
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {editingId === entry.id ? (
+                      <Select
+                        value={editForm.manager || ""}
+                        onValueChange={(value) => setEditForm(prev => ({ ...prev, manager: value }))}
+                      >
+                        <SelectTrigger className="w-40">
+                          <SelectValue placeholder="Select manager" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {managers
+                            .filter(mgr => 
+                              mgr.assignedSites?.includes(sites.find(s => s.name === entry.siteClient)?._id || '') ||
+                              mgr.site === entry.siteClient
+                            )
+                            .map(mgr => (
+                              <SelectItem key={mgr._id} value={mgr.name}>
+                                {mgr.name} - {mgr.department}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      entry.manager
                     )}
                   </TableCell>
                   <TableCell className="max-w-[200px] truncate" title={entry.remark}>
@@ -791,16 +1204,10 @@ const RosterSection = () => {
     );
   };
 
-  // Calendar View for Monthly Roster
   const MonthlyCalendarView = () => {
-    const days = getDaysInRange();
     const startDate = startOfMonth(selectedDate);
     const endDate = endOfMonth(selectedDate);
     
-    // Get all days in month
-    const monthDays = eachDayOfInterval({ start: startDate, end: endDate });
-    
-    // Get days before month start to fill first week
     const firstDayOfMonth = startOfWeek(startDate, { weekStartsOn: 1 });
     
     const allDays = eachDayOfInterval({ 
@@ -874,7 +1281,6 @@ const RosterSection = () => {
     );
   };
 
-  // Roster types
   const rosterTypes = ["daily", "weekly", "fortnightly", "monthly"];
 
   return (
@@ -887,6 +1293,14 @@ const RosterSection = () => {
               Roster Management
             </div>
             <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                onClick={fetchAllData} 
+                disabled={loadingData.sites || loadingData.supervisors || loadingData.managers || loadingData.employees || loadingData.roster || loadingData.tasks}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${(loadingData.sites || loadingData.supervisors || loadingData.managers || loadingData.employees || loadingData.roster || loadingData.tasks) ? 'animate-spin' : ''}`} />
+                Refresh Data
+              </Button>
               <Button variant="outline" onClick={handleExportReport} disabled={loadingData.roster}>
                 <Download className="mr-2 h-4 w-4" />
                 Export Report
@@ -895,7 +1309,6 @@ const RosterSection = () => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Roster Type Selection */}
           <div className="flex flex-wrap gap-4 mb-6">
             {rosterTypes.map((type) => (
               <Button
@@ -910,7 +1323,6 @@ const RosterSection = () => {
             ))}
           </div>
 
-          {/* Date Navigation */}
           <div className="flex items-center justify-between mb-6 p-4 bg-muted rounded-lg">
             <div className="flex items-center gap-4">
               <Button
@@ -1005,7 +1417,6 @@ const RosterSection = () => {
             </div>
           </div>
 
-          {/* Quick Stats */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <Card>
               <CardHeader className="pb-2">
@@ -1037,11 +1448,10 @@ const RosterSection = () => {
             </Card>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex flex-wrap gap-4 mb-6">
             <Dialog open={addEntryDialogOpen} onOpenChange={setAddEntryDialogOpen}>
               <DialogTrigger asChild>
-                <Button disabled={loadingData.sites || loadingData.supervisors || loadingData.employees}>
+                <Button disabled={loadingData.sites || loadingData.supervisors || loadingData.managers || loadingData.employees || loadingData.tasks}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Entry
                 </Button>
@@ -1100,24 +1510,86 @@ const RosterSection = () => {
                         <Select 
                           value={getCurrentSelectValue('supervisor')}
                           onValueChange={handleSupervisorSelect}
+                          disabled={!newRosterEntry.siteClient || filteredSupervisors.length === 0}
                           required
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Select supervisor" />
+                            <SelectValue placeholder={
+                              !newRosterEntry.siteClient 
+                                ? "Select a site first" 
+                                : filteredSupervisors.length === 0 
+                                  ? "No supervisors available for this site" 
+                                  : "Select supervisor"
+                            } />
                           </SelectTrigger>
                           <SelectContent>
-                            {supervisors.map(sup => (
-                              <SelectItem 
-                                key={createUniqueValue('supervisor', sup)}
-                                value={createUniqueValue('supervisor', sup)}
-                              >
-                                {sup.name} - {sup.department}
+                            {filteredSupervisors.length > 0 ? (
+                              filteredSupervisors.map(sup => (
+                                <SelectItem 
+                                  key={createUniqueValue('supervisor', sup)}
+                                  value={createUniqueValue('supervisor', sup)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <User className="h-4 w-4" />
+                                    {sup.name} - {sup.department}
+                                  </div>
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="no-supervisors" disabled>
+                                No supervisors available for this site
                               </SelectItem>
-                            ))}
+                            )}
                           </SelectContent>
                         </Select>
                       )}
                     </FormField>
+                    <FormField label="Manager" id="manager" required>
+                      {loadingData.managers ? (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span>Loading managers...</span>
+                        </div>
+                      ) : (
+                        <Select 
+                          value={getCurrentSelectValue('manager')}
+                          onValueChange={handleManagerSelect}
+                          disabled={!newRosterEntry.siteClient || filteredManagers.length === 0}
+                          required
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={
+                              !newRosterEntry.siteClient 
+                                ? "Select a site first" 
+                                : filteredManagers.length === 0 
+                                  ? "No managers available for this site" 
+                                  : "Select manager"
+                            } />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {filteredManagers.length > 0 ? (
+                              filteredManagers.map(mgr => (
+                                <SelectItem 
+                                  key={createUniqueValue('manager', mgr)}
+                                  value={createUniqueValue('manager', mgr)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <UserCog className="h-4 w-4" />
+                                    {mgr.name} - {mgr.department}
+                                  </div>
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="no-managers" disabled>
+                                No managers available for this site
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </FormField>
+                    
+                    {/* Employee Selection - Multi-select with search */}
                     <FormField label="Employee" id="employee" required>
                       {loadingData.employees ? (
                         <div className="flex items-center gap-2">
@@ -1125,30 +1597,77 @@ const RosterSection = () => {
                           <span>Loading employees...</span>
                         </div>
                       ) : (
-                        <Select 
-                          value={getCurrentSelectValue('employee')}
-                          onValueChange={handleEmployeeSelect}
-                          required
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select employee" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {employees
-                              .filter(emp => emp.status === "active")
-                              .map(emp => (
-                                <SelectItem 
-                                  key={createUniqueValue('employee', emp)}
-                                  value={createUniqueValue('employee', emp)}
-                                >
-                                  {emp.name} - {emp.position} ({emp.employeeId})
-                                </SelectItem>
-                              ))
-                            }
-                          </SelectContent>
-                        </Select>
+                        <div className="space-y-2">
+                          <Input
+                            placeholder="Search employees..."
+                            value={employeeSearchQuery}
+                            onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+                            className="mb-2"
+                          />
+                          <div className="border rounded-lg max-h-40 overflow-y-auto p-2">
+                            {filteredEmployees.length > 0 ? (
+                              filteredEmployeesBySearch.length > 0 ? (
+                                filteredEmployeesBySearch
+                                  .filter(emp => emp.status === "active")
+                                  .map(emp => (
+                                    <div
+                                      key={emp._id}
+                                      className={`flex items-center space-x-2 p-2 hover:bg-primary/5 rounded-lg cursor-pointer ${
+                                        selectedEmployees.includes(emp._id) ? 'bg-primary/10' : ''
+                                      }`}
+                                      onClick={() => handleEmployeeToggle(emp._id)}
+                                    >
+                                      <div className={`flex items-center justify-center h-4 w-4 rounded border ${
+                                        selectedEmployees.includes(emp._id) 
+                                          ? 'bg-primary border-primary' 
+                                          : 'border-gray-300'
+                                      }`}>
+                                        {selectedEmployees.includes(emp._id) && (
+                                          <Check className="h-3 w-3 text-primary-foreground" />
+                                        )}
+                                      </div>
+                                      <div className="flex-1">
+                                        <div className="font-medium">{emp.name}</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          {emp.employeeId} - {emp.position}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))
+                              ) : (
+                                <div className="text-center py-4 text-muted-foreground">
+                                  No employees match your search
+                                </div>
+                              )
+                            ) : (
+                              <div className="text-center py-4 text-muted-foreground">
+                                No employees available for this site
+                              </div>
+                            )}
+                          </div>
+                          {selectedEmployees.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {selectedEmployees.map(id => {
+                                const emp = employees.find(e => e._id === id);
+                                return emp ? (
+                                  <Badge key={id} variant="secondary" className="flex items-center gap-1">
+                                    {emp.name}
+                                    <X 
+                                      className="h-3 w-3 cursor-pointer" 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleEmployeeToggle(id);
+                                      }}
+                                    />
+                                  </Badge>
+                                ) : null;
+                              })}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </FormField>
+
                     <FormField label="Department" id="department" required>
                       <Input 
                         id="department" 
@@ -1156,6 +1675,8 @@ const RosterSection = () => {
                         onChange={(e) => setNewRosterEntry(prev => ({ ...prev, department: e.target.value }))}
                         placeholder="Enter department"
                         required 
+                        readOnly={selectedEmployees.length === 1}
+                        className={selectedEmployees.length === 1 ? "bg-muted" : ""}
                       />
                     </FormField>
                     <FormField label="Designation" id="designation" required>
@@ -1165,6 +1686,8 @@ const RosterSection = () => {
                         onChange={(e) => setNewRosterEntry(prev => ({ ...prev, designation: e.target.value }))}
                         placeholder="Enter designation"
                         required 
+                        readOnly={selectedEmployees.length === 1}
+                        className={selectedEmployees.length === 1 ? "bg-muted" : ""}
                       />
                     </FormField>
                     <FormField label="Shift" id="shift" required>
@@ -1185,23 +1708,76 @@ const RosterSection = () => {
                       </Select>
                     </FormField>
                     <FormField label="Shift Timing" id="shiftTiming" required>
+                      <div className="flex gap-2 items-center">
+                        <div className="flex-1">
+                          <label className="text-xs text-muted-foreground">Start Time</label>
+                          <Input
+                            type="time"
+                            value={startTime}
+                            onChange={(e) => setStartTime(e.target.value)}
+                            className="w-full"
+                          />
+                        </div>
+                        <span className="text-lg">-</span>
+                        <div className="flex-1">
+                          <label className="text-xs text-muted-foreground">End Time</label>
+                          <Input
+                            type="time"
+                            value={endTime}
+                            onChange={(e) => setEndTime(e.target.value)}
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
                       <Input 
-                        id="shiftTiming" 
+                        type="hidden"
                         value={newRosterEntry.shiftTiming}
-                        onChange={(e) => setNewRosterEntry(prev => ({ ...prev, shiftTiming: e.target.value }))}
-                        placeholder="e.g., 09:00-17:00" 
-                        required 
                       />
                     </FormField>
+                    
+                    {/* FIXED: Assigned Task Selection */}
                     <FormField label="Assigned Task" id="assignedTask" required>
-                      <Input 
-                        id="assignedTask" 
-                        value={newRosterEntry.assignedTask}
-                        onChange={(e) => setNewRosterEntry(prev => ({ ...prev, assignedTask: e.target.value }))}
-                        placeholder="Enter assigned task" 
-                        required 
-                      />
+                      {loadingData.tasks ? (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span>Loading tasks...</span>
+                        </div>
+                      ) : (
+                        <Select 
+                          value={newRosterEntry.assignedTask ? tasks.find(t => t.title === newRosterEntry.assignedTask)?._id || "" : ""}
+                          onValueChange={handleTaskSelect}
+                          disabled={!newRosterEntry.siteClient || filteredTasks.length === 0}
+                          required
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={
+                              !newRosterEntry.siteClient 
+                                ? "Select a site first" 
+                                : filteredTasks.length === 0 
+                                  ? "No tasks available for this site" 
+                                  : "Select task"
+                            } />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {filteredTasks.length > 0 ? (
+                              filteredTasks.map(task => (
+                                <SelectItem 
+                                  key={task._id} 
+                                  value={task._id}
+                                >
+                                  {task.title}
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="no-tasks" disabled>
+                                No tasks available for this site
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </FormField>
+
                     <FormField label="Hours" id="hours" required>
                       <Input 
                         id="hours" 
@@ -1231,7 +1807,7 @@ const RosterSection = () => {
                         Adding Entry...
                       </>
                     ) : (
-                      "Add Entry"
+                      selectedEmployees.length > 1 ? `Add ${selectedEmployees.length} Entries` : "Add Entry"
                     )}
                   </Button>
                 </form>
@@ -1239,7 +1815,6 @@ const RosterSection = () => {
             </Dialog>
           </div>
 
-          {/* Roster Display */}
           {selectedRoster === "monthly" ? (
             <MonthlyCalendarView />
           ) : (

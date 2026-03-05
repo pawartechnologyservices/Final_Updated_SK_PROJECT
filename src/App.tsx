@@ -62,6 +62,8 @@ import ManagerSupervisors from "./pages/manager/Supervisors";
 import ManagerTasks from "./pages/manager/ManagerTasks";
 import ManagerReports from "./pages/manager/ManagerReports";
 import ManagerLeave from "./pages/manager/Leave";
+
+import ManagerOperations from "./pages/manager/ManagerOperations"; 
 import ManagerNotifications from "./pages/manager/ManagerNotifications";
 import ManagerSettings from "./pages/manager/ManagerSettings";
 // import ManagerNotifications from "./pages/manager/ManagerNotifications";
@@ -88,7 +90,6 @@ import ManagerAttendance from "./pages/manager/ManagerAttendance";
 import WorkQuery from "./pages/supervisor/WorkQuery";
 import SuperAdminWorkIssues from "./pages/superadmin/SuperAdminWorkIssues";
 import AdminAttendanceView from "./pages/admin/AdminAttendanceView";
-//import ManagerOperations from "./pages/manager/ManagerOperations";
 import AdminHRMS from "./pages/admin/AdminHRMS";
 //import { AuthProvider } from "./contexts/AuthContext";
 // import AdminCRM from "./pages/admin/AdminCRM";
@@ -180,7 +181,7 @@ const App = () => (
               <Route path="tasks" element={<ManagerTasks />} />
               <Route path="reports" element={<ManagerReports />} />
               <Route path="leave" element={<ManagerLeave />} />
-               {/* <Route path="operations" element={<ManagerOperations />} /> */}
+              <Route path="operations" element={<ManagerOperations />} /> 
               <Route path="managerattendance" element={<ManagerAttendance />}/>
               <Route path="notifications" element={<ManagerNotifications />} />
               <Route path="settings" element={<ManagerSettings />} />

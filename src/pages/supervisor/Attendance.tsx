@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { DashboardHeader } from "@/components/shared/DashboardHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Calendar, CheckCircle, XCircle, Clock, Users, BarChart3, Download, CalendarDays, LogIn, LogOut, ChevronLeft, ChevronRight, FileSpreadsheet, Crown, RefreshCw, AlertCircle, Search, FileText, Loader2, MapPin, Shield } from "lucide-react";
+import { Calendar, CheckCircle, XCircle, Clock, Users, BarChart3, Download, CalendarDays, LogIn, LogOut, ChevronLeft, ChevronRight, FileSpreadsheet, Crown, RefreshCw, AlertCircle, Search, FileText, Loader2, MapPin, Shield, Building, Target, AlertTriangle, UserCheck, UserX, UserMinus, Info, Mail, Edit, Save } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
@@ -13,50 +13,69 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useRole } from "@/context/RoleContext";
+import axios from "axios";
 
-// API base URL
-const API_URL = `http://${window.location.hostname}:5001/api`;
+// API URL
+const API_URL = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:5001/api' 
+  : '/api';
 
-// Get current supervisor info from localStorage
-const getCurrentSupervisor = () => {
-  const storedUser = localStorage.getItem("sk_user");
-  if (storedUser) {
-    try {
-      const user = JSON.parse(storedUser);
-      return {
-        id: user._id || user.id || `supervisor-${Date.now()}`,
-        name: user.name || user.firstName || 'Supervisor',
-        supervisorId: user.supervisorId || user._id || `supervisor-${Date.now()}`
-      };
-    } catch (e) {
-      console.error('Error parsing user:', e);
-      return {
-        id: `supervisor-${Date.now()}`,
-        name: 'Supervisor',
-        supervisorId: `supervisor-${Date.now()}`
-      };
-    }
-  } else {
-    // Fallback for development
-    return {
-      id: 'supervisor-001',
-      name: 'Supervisor User',
-      supervisorId: 'supervisor-001',
-    };
-  }
-};
-
+// Types from your backend
 interface Employee {
   _id: string;
   employeeId: string;
   name: string;
   email: string;
   phone: string;
+  aadharNumber?: string;
+  panNumber?: string;
+  esicNumber?: string;
+  uanNumber?: string;
+  dateOfBirth?: string;
+  dateOfJoining: string;
+  dateOfExit?: string;
+  bloodGroup?: string;
+  gender?: string;
+  maritalStatus?: string;
+  permanentAddress?: string;
+  permanentPincode?: string;
+  localAddress?: string;
+  localPincode?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  branchName?: string;
+  bankBranch?: string;
+  fatherName?: string;
+  motherName?: string;
+  spouseName?: string;
+  numberOfChildren?: number;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyContactRelation?: string;
+  nomineeName?: string;
+  nomineeRelation?: string;
   department: string;
   position: string;
-  siteName: string;
+  siteName?: string;
+  salary: number;
   status: "active" | "inactive" | "left";
-  salary: number | string;
+  role?: string;
+  pantSize?: string;
+  shirtSize?: string;
+  capSize?: string;
+  idCardIssued?: boolean;
+  westcoatIssued?: boolean;
+  apronIssued?: boolean;
+  photo?: string;
+  photoPublicId?: string;
+  employeeSignature?: string;
+  employeeSignaturePublicId?: string;
+  authorizedSignature?: string;
+  authorizedSignaturePublicId?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface AttendanceRecord {
@@ -122,12 +141,59 @@ interface AttendanceStatus {
   lastCheckInDate?: string | null;
 }
 
+interface Task {
+  _id: string;
+  title: string;
+  description: string;
+  priority: "high" | "medium" | "low";
+  status: "pending" | "in-progress" | "completed" | "cancelled";
+  deadline: string;
+  dueDateTime?: string;
+  siteId: string;
+  siteName: string;
+  clientName?: string;
+  assignedUsers?: Array<{
+    userId: string;
+    name: string;
+    role: string;
+    assignedAt: string;
+    status: string;
+  }>;
+  assignedTo?: string;
+  assignedToName?: string;
+}
+
+interface Site {
+  _id: string;
+  name: string;
+  clientName?: string;
+  location?: string;
+  status?: string;
+}
+
+// New interface for status update
+interface StatusUpdateData {
+  employeeId: string;
+  employeeName: string;
+  attendanceId: string;
+  currentStatus: string;
+  newStatus: 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off';
+  date: string;
+  remarks: string;
+}
+
 const Attendance = () => {
+  const { user: currentUser, isAuthenticated } = useRole();
   const [activeTab, setActiveTab] = useState("my-attendance");
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   
-  // Current supervisor info
-  const [currentSupervisor, setCurrentSupervisor] = useState(getCurrentSupervisor());
+  // Current supervisor info from RoleContext
+  const [currentSupervisor, setCurrentSupervisor] = useState({
+    id: currentUser?._id || currentUser?.id || '',
+    name: currentUser?.name || 'Supervisor',
+    supervisorId: currentUser?._id || currentUser?.id || '',
+    email: currentUser?.email || ''
+  });
   
   // Supervisor attendance states - ONLY CURRENT SUPERVISOR'S DATA
   const [supervisorAttendance, setSupervisorAttendance] = useState<SupervisorAttendanceRecord[]>([]);
@@ -137,16 +203,28 @@ const Attendance = () => {
   
   // Employee attendance states
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [filteredEmployees, setFilteredEmployees] = useState<Employee[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [weeklySummaries, setWeeklySummaries] = useState<WeeklyAttendanceSummary[]>([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [loadingWeekly, setLoadingWeekly] = useState(false);
+  const [loadingSites, setLoadingSites] = useState(false);
+  
+  // Sites from tasks
+  const [allSites, setAllSites] = useState<Site[]>([]);
+  const [supervisorSites, setSupervisorSites] = useState<Site[]>([]);
+  const [supervisorSiteNames, setSupervisorSiteNames] = useState<string[]>([]);
   
   // Search and filter
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("all");
-  const [selectedSite, setSelectedSite] = useState<string>("all");
+  const [selectedSiteFilter, setSelectedSiteFilter] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(false);
+  
+  // Debug info
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
   
   // Manual attendance dialog
   const [manualAttendanceDialogOpen, setManualAttendanceDialogOpen] = useState(false);
@@ -161,74 +239,426 @@ const Attendance = () => {
     remarks: ""
   });
 
+  // New state for status update
+  const [statusUpdateDialogOpen, setStatusUpdateDialogOpen] = useState(false);
+  const [selectedEmployeeForStatusUpdate, setSelectedEmployeeForStatusUpdate] = useState<Employee | null>(null);
+  const [selectedAttendanceForStatusUpdate, setSelectedAttendanceForStatusUpdate] = useState<AttendanceRecord | null>(null);
+  const [statusUpdateData, setStatusUpdateData] = useState<StatusUpdateData>({
+    employeeId: '',
+    employeeName: '',
+    attendanceId: '',
+    currentStatus: '',
+    newStatus: 'present',
+    date: new Date().toISOString().split('T')[0],
+    remarks: ''
+  });
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
   // Week selection for register view
   const [selectedWeek, setSelectedWeek] = useState<number>(2);
   const [selectedYear, setSelectedYear] = useState<number>(2024);
   const [selectedMonth, setSelectedMonth] = useState<number>(0);
 
-  // Format time for display
-  const formatTimeForDisplay = (timestamp: string | null): string => {
-    if (!timestamp || timestamp === "-" || timestamp === "") return "-";
+  // Helper function to normalize site names for comparison
+  const normalizeSiteName = useCallback((siteName: string | null | undefined): string => {
+    if (!siteName) return '';
+    return siteName
+      .toString()
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9\s]/g, '');
+  }, []);
+
+  // Update current supervisor when currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      setCurrentSupervisor({
+        id: currentUser._id || currentUser.id || '',
+        name: currentUser.name || 'Supervisor',
+        supervisorId: currentUser._id || currentUser.id || '',
+        email: currentUser.email || ''
+      });
+    }
+  }, [currentUser]);
+
+  // Fetch tasks where this specific supervisor is assigned
+  const fetchSupervisorSitesFromTasks = useCallback(async () => {
+    if (!currentUser) return { siteNames: [], siteIds: [] };
     
     try {
-      if (typeof timestamp === 'string' && (timestamp.includes('AM') || timestamp.includes('PM'))) {
-        return timestamp;
-      }
+      const supervisorId = currentUser._id || currentUser.id;
+      const supervisorName = currentUser.name;
+      const supervisorEmail = currentUser.email;
       
-      if (timestamp.includes('T')) {
-        const date = new Date(timestamp);
-        if (!isNaN(date.getTime())) {
-          return date.toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit',
-            hour12: true 
-          });
+      console.log("🔍 Fetching tasks for supervisor:", {
+        id: supervisorId,
+        name: supervisorName,
+        email: supervisorEmail
+      });
+      
+      // Fetch all tasks from your tasks API
+      const response = await axios.get(`${API_URL}/tasks`, {
+        params: {
+          limit: 1000 // Get many tasks
+        }
+      });
+      
+      let supervisorSiteNamesSet = new Set<string>();
+      let supervisorSiteIdsSet = new Set<string>();
+      let tasksWithSupervisor: Task[] = [];
+      
+      // Handle response format
+      let allTasks: Task[] = [];
+      if (response.data) {
+        if (Array.isArray(response.data)) {
+          allTasks = response.data;
+        } else if (response.data.success && Array.isArray(response.data.data)) {
+          allTasks = response.data.data;
+        } else if (response.data.tasks && Array.isArray(response.data.tasks)) {
+          allTasks = response.data.tasks;
         }
       }
       
-      const timeParts = timestamp.split(':');
-      if (timeParts.length >= 2) {
-        const hours = parseInt(timeParts[0]);
-        const minutes = timeParts[1];
-        const period = hours >= 12 ? 'PM' : 'AM';
-        const displayHours = hours % 12 || 12;
-        return `${displayHours}:${minutes} ${period}`;
+      console.log(`📊 Total tasks fetched: ${allTasks.length}`);
+      
+      // Filter tasks where this supervisor is assigned
+      allTasks.forEach((task: Task) => {
+        let isAssignedToThisSupervisor = false;
+        
+        // Check assignedUsers array
+        if (task.assignedUsers && Array.isArray(task.assignedUsers)) {
+          isAssignedToThisSupervisor = task.assignedUsers.some(user => {
+            const userIdMatch = user.userId === supervisorId;
+            const nameMatch = user.name?.toLowerCase() === supervisorName?.toLowerCase();
+            return userIdMatch || nameMatch;
+          });
+        }
+        
+        // Check single assignee
+        if (!isAssignedToThisSupervisor && task.assignedTo) {
+          isAssignedToThisSupervisor = 
+            task.assignedTo === supervisorId || 
+            task.assignedToName?.toLowerCase() === supervisorName?.toLowerCase();
+        }
+        
+        if (isAssignedToThisSupervisor && task.siteId && task.siteName) {
+          supervisorSiteIdsSet.add(task.siteId);
+          supervisorSiteNamesSet.add(task.siteName);
+          tasksWithSupervisor.push(task);
+        }
+      });
+      
+      const supervisorSiteNames = Array.from(supervisorSiteNamesSet);
+      const supervisorSiteIds = Array.from(supervisorSiteIdsSet);
+      
+      console.log(`✅ Found ${tasksWithSupervisor.length} tasks for this supervisor`);
+      console.log("📍 Supervisor's sites from tasks:", supervisorSiteNames);
+      
+      setDebugInfo((prev: any) => ({
+        ...prev,
+        supervisorId,
+        supervisorName,
+        totalTasks: allTasks.length,
+        tasksWithSupervisor: tasksWithSupervisor.length,
+        supervisorSitesFromTasks: supervisorSiteNames,
+        supervisorSiteIds: supervisorSiteIds,
+        tasksList: tasksWithSupervisor.map(t => ({
+          title: t.title,
+          site: t.siteName,
+          status: t.status
+        }))
+      }));
+      
+      return { siteNames: supervisorSiteNames, siteIds: supervisorSiteIds };
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching tasks:', error);
+      
+      setDebugInfo((prev: any) => ({
+        ...prev,
+        taskFetchError: error.message
+      }));
+      
+      return { siteNames: [], siteIds: [] };
+    }
+  }, [currentUser]);
+
+  // Fetch all sites and filter by supervisor's task-assigned sites
+  const fetchAllSites = useCallback(async () => {
+    if (!currentUser) return [];
+    
+    try {
+      setLoadingSites(true);
+      
+      // First, get supervisor's sites from tasks
+      const { siteNames: taskSiteNames, siteIds: taskSiteIds } = await fetchSupervisorSitesFromTasks();
+      
+      console.log("🌐 Fetching all sites from API...");
+      
+      const response = await axios.get(`${API_URL}/sites`);
+      
+      let allSitesData: Site[] = [];
+      
+      if (response.data) {
+        // Handle different response formats
+        if (response.data.success && Array.isArray(response.data.data)) {
+          allSitesData = response.data.data;
+        } else if (Array.isArray(response.data)) {
+          allSitesData = response.data;
+        } else if (response.data.sites && Array.isArray(response.data.sites)) {
+          allSitesData = response.data.sites;
+        }
       }
       
-      return timestamp;
-    } catch (error) {
-      return timestamp || "-";
+      console.log(`📊 Fetched ${allSitesData.length} sites from API`);
+      
+      // Transform sites
+      const transformedSites = allSitesData.map((site: any) => ({
+        _id: site._id || site.id,
+        name: site.name,
+        clientName: site.clientName || site.client,
+        location: site.location || "",
+        status: site.status || "active"
+      }));
+      
+      setAllSites(transformedSites);
+      
+      // Filter sites based on task assignments
+      let supervisorSiteList: Site[] = [];
+      
+      if (taskSiteNames.length > 0) {
+        // Match sites by name from tasks
+        supervisorSiteList = transformedSites.filter(site => 
+          taskSiteNames.some(taskSiteName => 
+            site.name === taskSiteName || 
+            normalizeSiteName(site.name) === normalizeSiteName(taskSiteName)
+          ) || taskSiteIds.includes(site._id)
+        );
+        
+        console.log(`✅ Matched ${supervisorSiteList.length} sites from task assignments`);
+      } else {
+        console.log("⚠️ No sites found from tasks - supervisor has no assigned tasks");
+      }
+      
+      setSupervisorSites(supervisorSiteList);
+      setSupervisorSiteNames(supervisorSiteList.map(site => site.name));
+      
+      setDebugInfo((prev: any) => ({
+        ...prev,
+        allSitesCount: transformedSites.length,
+        matchedSitesCount: supervisorSiteList.length,
+        matchedSites: supervisorSiteList.map(s => s.name),
+        taskSiteNames
+      }));
+      
+      if (supervisorSiteList.length === 0) {
+        toast.warning("You don't have any tasks assigned to any sites. No employees will be shown.");
+      }
+      
+      return supervisorSiteList;
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching sites:', error);
+      toast.error(`Failed to load sites: ${error.message}`);
+      return [];
+    } finally {
+      setLoadingSites(false);
     }
-  };
+  }, [currentUser, fetchSupervisorSitesFromTasks, normalizeSiteName]);
 
-  const formatDate = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
-  const getDayAbbreviation = (date: Date) => {
-    return date.toLocaleDateString('en-US', { weekday: 'short' });
-  };
-
-  const getWeekDates = (year: number, month: number, weekNumber: number) => {
-    const dates = [];
-    const startDate = new Date(year, month, 1);
-    
-    while (startDate.getDay() !== 1) {
-      startDate.setDate(startDate.getDate() + 1);
+  // Fetch employees from your backend API - ONLY from task-assigned sites
+  const fetchEmployees = useCallback(async () => {
+    if (!currentUser) {
+      console.log("No current user");
+      setLoadingEmployees(false);
+      return;
     }
     
-    startDate.setDate(startDate.getDate() + (weekNumber - 1) * 7);
-    
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(startDate);
-      date.setDate(startDate.getDate() + i);
-      dates.push(date);
+    try {
+      setLoadingEmployees(true);
+      
+      // First, ensure we have supervisor sites from tasks
+      let supervisorSiteList = supervisorSites;
+      let supervisorSiteNameList = supervisorSiteNames;
+      
+      if (supervisorSiteList.length === 0) {
+        supervisorSiteList = await fetchAllSites() || [];
+        supervisorSiteNameList = supervisorSiteList.map(site => site.name);
+      }
+      
+      // If no sites from tasks, set empty employees array
+      if (supervisorSiteNameList.length === 0) {
+        console.log("❌ No sites from tasks - setting empty employees array");
+        setEmployees([]);
+        setFilteredEmployees([]);
+        
+        toast.warning("You have no tasks assigned to any sites. Please contact your administrator.");
+        return;
+      }
+      
+      // Fetch all employees from your API
+      console.log("📡 Fetching all employees from API:", `${API_URL}/employees`);
+      
+      const response = await axios.get(`${API_URL}/employees`, {
+        params: {
+          limit: 1000 // Get all employees
+        }
+      });
+      
+      let fetchedEmployees: Employee[] = [];
+      let allEmployees: Employee[] = [];
+      
+      if (response.data) {
+        // Handle different response formats
+        if (response.data.success) {
+          allEmployees = response.data.data || response.data.employees || [];
+        } else if (Array.isArray(response.data)) {
+          allEmployees = response.data;
+        } else if (response.data.employees && Array.isArray(response.data.employees)) {
+          allEmployees = response.data.employees;
+        }
+        
+        console.log(`📊 Total employees from API: ${allEmployees.length}`);
+        console.log("📍 Supervisor's task-assigned sites:", supervisorSiteNameList);
+        
+        // Filter employees by supervisor's task-assigned sites ONLY
+        const supervisorSiteNormalizedNames = supervisorSiteNameList.map(name => normalizeSiteName(name));
+        
+        fetchedEmployees = allEmployees.filter((emp: Employee) => {
+          const employeeSite = emp.siteName || '';
+          const employeeSiteNormalized = normalizeSiteName(employeeSite);
+          
+          // Check if employee's site matches any of supervisor's sites from tasks
+          const matchesExactName = supervisorSiteNameList.includes(employeeSite);
+          const matchesNormalizedName = supervisorSiteNormalizedNames.includes(employeeSiteNormalized);
+          const matchesPartial = supervisorSiteNormalizedNames.some(siteNorm => 
+            employeeSiteNormalized.includes(siteNorm) || 
+            siteNorm.includes(employeeSiteNormalized)
+          );
+          
+          const matches = matchesExactName || matchesNormalizedName || matchesPartial;
+          
+          if (matches) {
+            console.log(`✅ Employee ${emp.name} (${emp.employeeId}) matches site: ${employeeSite}`);
+          }
+          
+          return matches;
+        });
+        
+        console.log(`✅ Filtered ${fetchedEmployees.length} employees for supervisor's task-assigned sites`);
+        
+        // Log which sites have employees
+        const siteCount: Record<string, number> = {};
+        fetchedEmployees.forEach(emp => {
+          const site = emp.siteName || 'Unknown';
+          siteCount[site] = (siteCount[site] || 0) + 1;
+        });
+        console.log("📊 Employee distribution by site:", siteCount);
+        
+        // Calculate employee distribution by site for debugging
+        const siteDistribution: Record<string, number> = {};
+        allEmployees.forEach((emp: Employee) => {
+          const site = emp.siteName || 'Unassigned';
+          siteDistribution[site] = (siteDistribution[site] || 0) + 1;
+        });
+        
+        setDebugInfo((prev: any) => ({
+          ...prev,
+          allEmployeesCount: allEmployees.length,
+          filteredEmployeesCount: fetchedEmployees.length,
+          supervisorSitesFromTasks: supervisorSiteNameList,
+          employeeSiteDistribution: siteDistribution,
+          matchedEmployees: fetchedEmployees.map(e => ({
+            name: e.name,
+            site: e.siteName
+          }))
+        }));
+        
+      } else {
+        console.warn("⚠️ Unexpected API response format:", response.data);
+        toast.error("Failed to fetch employees: Invalid response format");
+      }
+      
+      setEmployees(fetchedEmployees);
+      setFilteredEmployees(fetchedEmployees);
+      
+      if (fetchedEmployees.length > 0) {
+        toast.success(`Loaded ${fetchedEmployees.length} employees for your task-assigned sites`);
+      } else {
+        toast.warning(`No employees found for your task-assigned sites: ${supervisorSiteNameList.join(', ')}`);
+      }
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching employees:', error);
+      
+      // Handle different error types
+      if (error.code === 'ERR_NETWORK') {
+        toast.error("Network error: Cannot connect to server. Please check if backend is running.");
+      } else if (error.response?.status === 404) {
+        toast.error("API endpoint not found. Please check backend configuration.");
+      } else {
+        toast.error(`Failed to load employees: ${error.message}`);
+      }
+      
+      setEmployees([]);
+      setFilteredEmployees([]);
+    } finally {
+      setLoadingEmployees(false);
     }
-    return dates;
-  };
+  }, [currentUser, supervisorSites, supervisorSiteNames, fetchAllSites, normalizeSiteName]);
+
+  // Initialize data
+  useEffect(() => {
+    if (currentUser && currentUser.role === "supervisor") {
+      console.log("🚀 Initializing supervisor attendance data...", {
+        id: currentUser._id || currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        role: currentUser.role
+      });
+      
+      // First fetch sites from tasks, then employees
+      const initializeData = async () => {
+        await fetchAllSites();
+        await fetchEmployees();
+        await loadSupervisorAttendance();
+        await loadAttendanceRecords(selectedDate);
+      };
+      
+      initializeData();
+    }
+  }, [currentUser]);
+
+  // Filter employees based on search and filters
+  useEffect(() => {
+    let filtered = [...employees];
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter(emp => 
+        emp.name.toLowerCase().includes(query) ||
+        emp.employeeId.toLowerCase().includes(query) ||
+        emp.email.toLowerCase().includes(query) ||
+        emp.phone?.includes(query) ||
+        emp.department?.toLowerCase().includes(query) ||
+        emp.position?.toLowerCase().includes(query)
+      );
+    }
+    
+    // Apply site filter
+    if (selectedSiteFilter !== "all") {
+      filtered = filtered.filter(emp => emp.siteName === selectedSiteFilter);
+    }
+    
+    // Apply department filter
+    if (selectedDepartment !== "all") {
+      filtered = filtered.filter(emp => emp.department === selectedDepartment);
+    }
+    
+    setFilteredEmployees(filtered);
+  }, [employees, searchQuery, selectedSiteFilter, selectedDepartment]);
 
   // SUPERVISOR ATTENDANCE FUNCTIONS - FOR CURRENT SUPERVISOR ONLY
   const loadSupervisorAttendance = async () => {
@@ -240,13 +670,10 @@ const Attendance = () => {
       
       // Load current status
       try {
-        const statusResponse = await fetch(`${API_URL}/api/attendance/status/${currentSupervisor.id}`);
-        if (statusResponse.ok) {
-          const statusData = await statusResponse.json();
-          if (statusData.success) {
-            setCurrentStatus(statusData.data);
-            console.log('✅ Current status loaded:', statusData.data);
-          }
+        const statusResponse = await axios.get(`${API_URL}/attendance/status/${currentSupervisor.id}`);
+        if (statusResponse.data && statusResponse.data.success) {
+          setCurrentStatus(statusResponse.data.data);
+          console.log('✅ Current status loaded:', statusResponse.data.data);
         }
       } catch (statusError) {
         console.log('Status API call failed:', statusError);
@@ -255,65 +682,64 @@ const Attendance = () => {
       // Load attendance history - ONLY FOR CURRENT SUPERVISOR
       try {
         console.log('📋 Fetching attendance history for supervisor:', currentSupervisor.id);
-        const historyResponse = await fetch(`${API_URL}/api/attendance/history?employeeId=${currentSupervisor.id}`);
+        const historyResponse = await axios.get(`${API_URL}/attendance/history`, {
+          params: { employeeId: currentSupervisor.id }
+        });
         
-        if (historyResponse.ok) {
-          const historyData = await historyResponse.json();
-          console.log('📊 Supervisor attendance history response:', historyData);
+        console.log('📊 Supervisor attendance history response:', historyResponse.data);
+        
+        if (historyResponse.data && historyResponse.data.success && Array.isArray(historyResponse.data.data)) {
+          // Filter to include ONLY current supervisor's records
+          const supervisorRecords = historyResponse.data.data.filter((record: any) => 
+            record.employeeId === currentSupervisor.id || 
+            record.supervisorId === currentSupervisor.id
+          );
           
-          if (historyData.success && Array.isArray(historyData.data)) {
-            // Filter to include ONLY current supervisor's records
-            const supervisorRecords = historyData.data.filter((record: any) => 
-              record.employeeId === currentSupervisor.id || 
-              record.supervisorId === currentSupervisor.id
-            );
+          console.log(`✅ Found ${supervisorRecords.length} records for current supervisor`);
+          
+          const transformedRecords = supervisorRecords.map((record: any, index: number) => {
+            const recordDate = record.date ? record.date : 
+                             new Date(Date.now() - index * 86400000).toISOString().split('T')[0];
             
-            console.log(`✅ Found ${supervisorRecords.length} records for current supervisor`);
+            let status = "Absent";
+            if (record.checkInTime && record.checkOutTime) {
+              status = "Present";
+            } else if (record.checkInTime && !record.checkOutTime) {
+              status = "In Progress";
+            } else if (record.status === "Weekly Off") {
+              status = "Weekly Off";
+            }
             
-            const transformedRecords = supervisorRecords.map((record: any, index: number) => {
-              const recordDate = record.date ? record.date : 
-                               new Date(Date.now() - index * 86400000).toISOString().split('T')[0];
-              
-              let status = "Absent";
-              if (record.checkInTime && record.checkOutTime) {
-                status = "Present";
-              } else if (record.checkInTime && !record.checkOutTime) {
-                status = "In Progress";
-              } else if (record.status === "Weekly Off") {
-                status = "Weekly Off";
-              }
-              
-              return {
-                id: record._id || record.id || `record-${index}`,
-                employeeId: record.employeeId || currentSupervisor.id,
-                employeeName: record.employeeName || currentSupervisor.name,
-                supervisorId: record.supervisorId || currentSupervisor.supervisorId,
-                date: recordDate,
-                checkInTime: record.checkInTime ? formatTimeForDisplay(record.checkInTime) : "-",
-                checkOutTime: record.checkOutTime ? formatTimeForDisplay(record.checkOutTime) : "-",
-                breakStartTime: record.breakStartTime ? formatTimeForDisplay(record.breakStartTime) : "-",
-                breakEndTime: record.breakEndTime ? formatTimeForDisplay(record.breakEndTime) : "-",
-                totalHours: Number(record.totalHours) || 0,
-                breakTime: Number(record.breakTime) || 0,
-                status: status,
-                shift: record.shift || "Supervisor Shift",
-                hours: Number(record.totalHours) || 0
-              };
-            });
-            
-            transformedRecords.sort((a: SupervisorAttendanceRecord, b: SupervisorAttendanceRecord) => 
-              new Date(b.date).getTime() - new Date(a.date).getTime()
-            );
-            
-            setSupervisorAttendance(transformedRecords);
-            return;
-          }
+            return {
+              id: record._id || record.id || `record-${index}`,
+              employeeId: record.employeeId || currentSupervisor.id,
+              employeeName: record.employeeName || currentSupervisor.name,
+              supervisorId: record.supervisorId || currentSupervisor.supervisorId,
+              date: recordDate,
+              checkInTime: record.checkInTime ? formatTimeForDisplay(record.checkInTime) : "-",
+              checkOutTime: record.checkOutTime ? formatTimeForDisplay(record.checkOutTime) : "-",
+              breakStartTime: record.breakStartTime ? formatTimeForDisplay(record.breakStartTime) : "-",
+              breakEndTime: record.breakEndTime ? formatTimeForDisplay(record.breakEndTime) : "-",
+              totalHours: Number(record.totalHours) || 0,
+              breakTime: Number(record.breakTime) || 0,
+              status: status,
+              shift: record.shift || "Supervisor Shift",
+              hours: Number(record.totalHours) || 0
+            };
+          });
+          
+          transformedRecords.sort((a: SupervisorAttendanceRecord, b: SupervisorAttendanceRecord) => 
+            new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          
+          setSupervisorAttendance(transformedRecords);
+          return;
         }
       } catch (historyError) {
         console.log('History API call failed:', historyError);
       }
       
-      // Sample data - ONLY FOR CURRENT SUPERVISOR
+      // Sample data - ONLY FOR CURRENT SUPERVISOR (fallback)
       const sampleData: SupervisorAttendanceRecord[] = [
         {
           id: "today",
@@ -404,15 +830,9 @@ const Attendance = () => {
         supervisorId: currentSupervisor.supervisorId,
       };
       
-      const response = await fetch(`${API_URL}/api/attendance/checkin`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await axios.post(`${API_URL}/attendance/checkin`, payload);
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success("Checked in successfully!");
@@ -425,7 +845,7 @@ const Attendance = () => {
           checkInTime: now,
           checkOutTime: null,
           lastCheckInDate: new Date().toDateString()
-        };
+        } as AttendanceStatus;
         setCurrentStatus(newStatus);
         
         // Reload supervisor attendance
@@ -445,7 +865,7 @@ const Attendance = () => {
         checkInTime: now,
         checkOutTime: null,
         lastCheckInDate: new Date().toDateString()
-      };
+      } as AttendanceStatus;
       setCurrentStatus(newStatus);
     }
   };
@@ -459,15 +879,9 @@ const Attendance = () => {
         employeeId: currentSupervisor.id,
       };
       
-      const response = await fetch(`${API_URL}/api/attendance/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await axios.post(`${API_URL}/attendance/checkout`, payload);
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success("Checked out successfully!");
@@ -481,7 +895,7 @@ const Attendance = () => {
           isOnBreak: false,
           checkOutTime: now,
           totalHours: totalHours
-        };
+        } as AttendanceStatus;
         setCurrentStatus(newStatus);
         
         // Reload supervisor attendance
@@ -502,7 +916,7 @@ const Attendance = () => {
         isOnBreak: false,
         checkOutTime: now,
         totalHours: totalHours
-      };
+      } as AttendanceStatus;
       setCurrentStatus(newStatus);
     }
   };
@@ -516,15 +930,9 @@ const Attendance = () => {
         employeeId: currentSupervisor.id,
       };
       
-      const response = await fetch(`${API_URL}/api/attendance/breakin`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await axios.post(`${API_URL}/attendance/breakin`, payload);
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success("Break started successfully!");
@@ -535,7 +943,7 @@ const Attendance = () => {
           ...currentStatus,
           isOnBreak: true,
           breakStartTime: now
-        };
+        } as AttendanceStatus;
         setCurrentStatus(newStatus);
         
         // Reload supervisor attendance
@@ -553,7 +961,7 @@ const Attendance = () => {
         ...currentStatus,
         isOnBreak: true,
         breakStartTime: now
-      };
+      } as AttendanceStatus;
       setCurrentStatus(newStatus);
     }
   };
@@ -567,15 +975,9 @@ const Attendance = () => {
         employeeId: currentSupervisor.id,
       };
       
-      const response = await fetch(`${API_URL}/api/attendance/breakout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await axios.post(`${API_URL}/attendance/breakout`, payload);
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success("Break ended successfully!");
@@ -589,7 +991,7 @@ const Attendance = () => {
           isOnBreak: false,
           breakEndTime: now,
           breakTime: totalBreakTime
-        };
+        } as AttendanceStatus;
         setCurrentStatus(newStatus);
         
         // Reload supervisor attendance
@@ -610,158 +1012,26 @@ const Attendance = () => {
         isOnBreak: false,
         breakEndTime: now,
         breakTime: totalBreakTime
-      };
+      } as AttendanceStatus;
       setCurrentStatus(newStatus);
     }
   };
 
-  // NEW EMPLOYEE ATTENDANCE FUNCTIONS
-  const loadEmployees = async () => {
-    try {
-      setLoadingEmployees(true);
-      console.log('Fetching employees from:', `${API_URL}/api/employees`);
-      
-      const response = await fetch(`${API_URL}/api/employees`);
-      const data = await response.json();
-      
-      console.log('Employees API response:', data);
-      
-      if (data.success) {
-        // Handle different response formats
-        let employeesData = [];
-        
-        if (Array.isArray(data.data)) {
-          employeesData = data.data;
-        } else if (Array.isArray(data.employees)) {
-          employeesData = data.employees;
-        } else if (data.data && Array.isArray(data.data.employees)) {
-          employeesData = data.data.employees;
-        } else if (Array.isArray(data)) {
-          employeesData = data;
-        }
-        
-        // Transform employee data to match our interface
-        const transformedEmployees = employeesData.map((emp: any) => ({
-          _id: emp._id || emp.id || `emp_${Math.random()}`,
-          employeeId: emp.employeeId || emp.employeeID || `EMP${String(Math.random()).slice(2, 6)}`,
-          name: emp.name || emp.employeeName || "Unknown Employee",
-          email: emp.email || "",
-          phone: emp.phone || emp.mobile || "",
-          department: emp.department || "Unknown Department",
-          position: emp.position || emp.designation || emp.role || "Employee",
-          siteName: emp.siteName || emp.site || "Main Site",
-          status: (emp.status || "active") as "active" | "inactive" | "left",
-          salary: emp.salary || emp.basicSalary || 0
-        }));
-        
-        console.log('Transformed employees:', transformedEmployees);
-        setEmployees(transformedEmployees);
-        
-        if (transformedEmployees.length === 0) {
-          toast.warning("No employees found in the database");
-        } else {
-          toast.success(`Loaded ${transformedEmployees.length} employees`);
-        }
-      } else {
-        console.error('Failed to load employees:', data.message || data.error);
-        toast.error(data.message || "Failed to load employees");
-        
-        // Load sample data if API fails
-        loadSampleEmployees();
-      }
-    } catch (error: any) {
-      console.error('Error loading employees:', error);
-      toast.error(`Error loading employees: ${error.message}`);
-      
-      // Load sample data on error
-      loadSampleEmployees();
-    } finally {
-      setLoadingEmployees(false);
-    }
-  };
-
-  // Load sample employees if API fails
-  const loadSampleEmployees = () => {
-    const sampleEmployees: Employee[] = [
-      {
-        _id: "emp_1",
-        employeeId: "EMP001",
-        name: "John Doe",
-        email: "john@example.com",
-        phone: "9876543210",
-        department: "Housekeeping",
-        position: "Cleaner",
-        siteName: "Main Site",
-        status: "active",
-        salary: 18000
-      },
-      {
-        _id: "emp_2",
-        employeeId: "EMP002",
-        name: "Jane Smith",
-        email: "jane@example.com",
-        phone: "9876543211",
-        department: "Security",
-        position: "Security Guard",
-        siteName: "Site A",
-        status: "active",
-        salary: 20000
-      },
-      {
-        _id: "emp_3",
-        employeeId: "EMP003",
-        name: "Mike Johnson",
-        email: "mike@example.com",
-        phone: "9876543212",
-        department: "Housekeeping",
-        position: "Supervisor",
-        siteName: "Main Site",
-        status: "active",
-        salary: 25000
-      },
-      {
-        _id: "emp_4",
-        employeeId: "EMP004",
-        name: "Sarah Williams",
-        email: "sarah@example.com",
-        phone: "9876543213",
-        department: "Waste Management",
-        position: "Worker",
-        siteName: "Site B",
-        status: "active",
-        salary: 15000
-      },
-      {
-        _id: "emp_5",
-        employeeId: "EMP005",
-        name: "David Brown",
-        email: "david@example.com",
-        phone: "9876543214",
-        department: "Parking",
-        position: "Attendant",
-        siteName: "Main Site",
-        status: "inactive",
-        salary: 16000
-      }
-    ];
-    
-    setEmployees(sampleEmployees);
-    toast.info("Using sample employee data. Check your API connection.");
-  };
-
+  // Load attendance records for selected date
   const loadAttendanceRecords = async (date: string) => {
     try {
       setLoadingAttendance(true);
       console.log('📋 Fetching attendance for date:', date);
       
-      const response = await fetch(`${API_URL}/api/attendance?date=${date}`);
-      const data = await response.json();
+      const response = await axios.get(`${API_URL}/attendance`, {
+        params: { date }
+      });
       
-      console.log('Attendance API response:', data);
+      console.log('Attendance API response:', response.data);
       
-      if (data.success) {
+      if (response.data && response.data.success) {
         // Process records to ensure no negative hours
-        const processedRecords = (data.data || []).map((record: any) => {
+        const processedRecords = (response.data.data || []).map((record: any) => {
           if (record.checkInTime && record.checkOutTime) {
             // Recalculate hours if they're negative
             const calculatedHours = calculateTotalHours(record.checkInTime, record.checkOutTime);
@@ -774,109 +1044,171 @@ const Attendance = () => {
         
         setAttendanceRecords(processedRecords);
       } else {
-        console.error('Failed to load attendance:', data.message);
+        console.error('Failed to load attendance:', response.data?.message);
         setAttendanceRecords([]);
-        
-        // Load sample attendance data
-        loadSampleAttendance(date);
       }
     } catch (error: any) {
       console.error('Error loading attendance:', error);
       setAttendanceRecords([]);
-      
-      // Load sample attendance data on error
-      loadSampleAttendance(date);
     } finally {
       setLoadingAttendance(false);
     }
   };
 
-  // Load sample attendance data
-  const loadSampleAttendance = (date: string) => {
-    const sampleAttendance: AttendanceRecord[] = [
-      {
-        _id: "att_1",
-        employeeId: "emp_1",
-        employeeName: "John Doe",
-        date: date,
-        checkInTime: `${date}T09:00:00`,
-        checkOutTime: `${date}T18:00:00`,
-        breakStartTime: `${date}T13:00:00`,
-        breakEndTime: `${date}T14:00:00`,
-        totalHours: 8,
-        breakTime: 1,
-        status: "present",
-        isCheckedIn: false,
-        isOnBreak: false,
-        supervisorId: currentSupervisor.supervisorId
-      },
-      {
-        _id: "att_2",
-        employeeId: "emp_2",
-        employeeName: "Jane Smith",
-        date: date,
-        checkInTime: `${date}T14:00:00`,
-        checkOutTime: `${date}T22:00:00`,
-        breakStartTime: null,
-        breakEndTime: null,
-        totalHours: 8,
-        breakTime: 0,
-        status: "present",
-        isCheckedIn: false,
-        isOnBreak: false,
-        supervisorId: currentSupervisor.supervisorId
-      },
-      {
-        _id: "att_3",
-        employeeId: "emp_3",
-        employeeName: "Mike Johnson",
-        date: date,
-        checkInTime: `${date}T08:30:00`,
-        checkOutTime: null,
-        breakStartTime: null,
-        breakEndTime: null,
-        totalHours: 0,
-        breakTime: 0,
-        status: "present",
-        isCheckedIn: true,
-        isOnBreak: false,
-        supervisorId: currentSupervisor.supervisorId
-      },
-      {
-        _id: "att_4",
-        employeeId: "emp_4",
-        employeeName: "Sarah Williams",
-        date: date,
-        checkInTime: null,
-        checkOutTime: null,
-        breakStartTime: null,
-        breakEndTime: null,
-        totalHours: 0,
-        breakTime: 0,
-        status: "absent",
-        isCheckedIn: false,
-        isOnBreak: false,
-        supervisorId: currentSupervisor.supervisorId
-      },
-      {
-        _id: "att_5",
-        employeeId: "emp_5",
-        employeeName: "David Brown",
-        date: date,
-        checkInTime: null,
-        checkOutTime: null,
-        breakStartTime: null,
-        breakEndTime: null,
-        totalHours: 0,
-        breakTime: 0,
-        status: "weekly-off",
-        isCheckedIn: false,
-        isOnBreak: false,
-        supervisorId: currentSupervisor.supervisorId
+  // Load weekly summaries
+  const loadWeeklySummaries = async (weekStart: string, weekEnd: string) => {
+    try {
+      setLoadingWeekly(true);
+      console.log('📋 Fetching weekly summary for:', { weekStart, weekEnd });
+      
+      // Try to get weekly summary from the API endpoint
+      try {
+        const weeklyResponse = await axios.get(`${API_URL}/attendance/weekly-summary`, {
+          params: { startDate: weekStart, endDate: weekEnd }
+        });
+        
+        console.log('Weekly summary API response:', weeklyResponse.data);
+        
+        if (weeklyResponse.data && weeklyResponse.data.success && Array.isArray(weeklyResponse.data.data)) {
+          // Transform the data to match our interface
+          const transformedSummaries = weeklyResponse.data.data.map((item: any) => ({
+            employeeId: item.employeeId || item._id || `emp_${Math.random()}`,
+            employeeName: item.employeeName || "Unknown Employee",
+            department: item.department || "Unknown",
+            weekStartDate: weekStart,
+            weekEndDate: weekEnd,
+            daysPresent: item.daysPresent || item.presentDays || 0,
+            daysAbsent: item.daysAbsent || item.absentDays || 0,
+            daysHalfDay: item.daysHalfDay || item.halfDays || 0,
+            daysLeave: item.daysLeave || item.leaveDays || 0,
+            daysWeeklyOff: item.daysWeeklyOff || item.weeklyOffDays || 0,
+            totalHours: item.totalHours || item.workingHours || 0,
+            totalBreakTime: item.totalBreakTime || item.breakHours || 0,
+            overallStatus: (item.overallStatus || 'absent') as 'present' | 'absent' | 'mixed'
+          }));
+          
+          console.log('Transformed weekly summaries:', transformedSummaries);
+          setWeeklySummaries(transformedSummaries);
+          return;
+        }
+      } catch (weeklyError) {
+        console.log('Weekly summary API failed, calculating from employees:', weeklyError);
       }
-    ];
+      
+      // If weekly summary API fails, create empty summaries from employees
+      if (employees.length > 0) {
+        const emptySummaries = employees.map(emp => ({
+          employeeId: emp._id,
+          employeeName: emp.name,
+          department: emp.department,
+          weekStartDate: weekStart,
+          weekEndDate: weekEnd,
+          daysPresent: 0,
+          daysAbsent: 0,
+          daysHalfDay: 0,
+          daysLeave: 0,
+          daysWeeklyOff: 0,
+          totalHours: 0,
+          totalBreakTime: 0,
+          overallStatus: 'absent' as const
+        }));
+        setWeeklySummaries(emptySummaries);
+      } else {
+        setWeeklySummaries([]);
+      }
+      
+    } catch (error) {
+      console.error('Error loading weekly summaries:', error);
+      toast.error("Error loading weekly attendance data");
+      
+      // Show empty state
+      if (employees.length > 0) {
+        const emptySummaries = employees.map(emp => ({
+          employeeId: emp._id,
+          employeeName: emp.name,
+          department: emp.department,
+          weekStartDate: weekStart,
+          weekEndDate: weekEnd,
+          daysPresent: 0,
+          daysAbsent: 0,
+          daysHalfDay: 0,
+          daysLeave: 0,
+          daysWeeklyOff: 0,
+          totalHours: 0,
+          totalBreakTime: 0,
+          overallStatus: 'absent' as const
+        }));
+        setWeeklySummaries(emptySummaries);
+      } else {
+        setWeeklySummaries([]);
+      }
+    } finally {
+      setLoadingWeekly(false);
+    }
+  };
+
+  // Format time for display
+  const formatTimeForDisplay = (timestamp: string | null): string => {
+    if (!timestamp || timestamp === "-" || timestamp === "") return "-";
     
-    setAttendanceRecords(sampleAttendance);
+    try {
+      if (typeof timestamp === 'string' && (timestamp.includes('AM') || timestamp.includes('PM'))) {
+        return timestamp;
+      }
+      
+      if (timestamp.includes('T')) {
+        const date = new Date(timestamp);
+        if (!isNaN(date.getTime())) {
+          return date.toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: true 
+          });
+        }
+      }
+      
+      const timeParts = timestamp.split(':');
+      if (timeParts.length >= 2) {
+        const hours = parseInt(timeParts[0]);
+        const minutes = timeParts[1];
+        const period = hours >= 12 ? 'PM' : 'AM';
+        const displayHours = hours % 12 || 12;
+        return `${displayHours}:${minutes} ${period}`;
+      }
+      
+      return timestamp;
+    } catch (error) {
+      return timestamp || "-";
+    }
+  };
+
+  const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const getDayAbbreviation = (date: Date) => {
+    return date.toLocaleDateString('en-US', { weekday: 'short' });
+  };
+
+  const getWeekDates = (year: number, month: number, weekNumber: number) => {
+    const dates = [];
+    const startDate = new Date(year, month, 1);
+    
+    while (startDate.getDay() !== 1) {
+      startDate.setDate(startDate.getDate() + 1);
+    }
+    
+    startDate.setDate(startDate.getDate() + (weekNumber - 1) * 7);
+    
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startDate);
+      date.setDate(startDate.getDate() + i);
+      dates.push(date);
+    }
+    return dates;
   };
 
   const formatHours = (hours: number): string => {
@@ -935,421 +1267,36 @@ const Attendance = () => {
     return (endTime - startTime) / (1000 * 60 * 60);
   };
 
-  // Load weekly summaries
-  const loadWeeklySummaries = async (weekStart: string, weekEnd: string) => {
-    try {
-      setLoadingWeekly(true);
-      console.log('📋 Fetching weekly summary for:', { weekStart, weekEnd });
-      
-      // First, try to get weekly summary from the API endpoint
-      try {
-        const weeklyResponse = await fetch(
-          `${API_URL}/api/attendance/weekly-summary?startDate=${weekStart}&endDate=${weekEnd}`
-        );
-        
-        if (weeklyResponse.ok) {
-          const weeklyData = await weeklyResponse.json();
-          console.log('Weekly summary API response:', weeklyData);
-          
-          if (weeklyData.success && Array.isArray(weeklyData.data)) {
-            // Transform the data to match our interface
-            const transformedSummaries = weeklyData.data.map((item: any) => ({
-              employeeId: item.employeeId || item._id || `emp_${Math.random()}`,
-              employeeName: item.employeeName || "Unknown Employee",
-              department: item.department || "Unknown",
-              weekStartDate: weekStart,
-              weekEndDate: weekEnd,
-              daysPresent: item.daysPresent || item.presentDays || 0,
-              daysAbsent: item.daysAbsent || item.absentDays || 0,
-              daysHalfDay: item.daysHalfDay || item.halfDays || 0,
-              daysLeave: item.daysLeave || item.leaveDays || 0,
-              daysWeeklyOff: item.daysWeeklyOff || item.weeklyOffDays || 0,
-              totalHours: item.totalHours || item.workingHours || 0,
-              totalBreakTime: item.totalBreakTime || item.breakHours || 0,
-              overallStatus: (item.overallStatus || 'absent') as 'present' | 'absent' | 'mixed'
-            }));
-            
-            console.log('Transformed weekly summaries:', transformedSummaries);
-            setWeeklySummaries(transformedSummaries);
-            return;
-          }
-        }
-      } catch (weeklyError) {
-        console.log('Weekly summary API failed, trying bulk attendance fetch:', weeklyError);
-      }
-      
-      // If weekly summary API fails, try to fetch all attendance records for the week
-      await fetchAllAttendanceForWeek(weekStart, weekEnd);
-      
-    } catch (error) {
-      console.error('Error loading weekly summaries:', error);
-      toast.error("Error loading weekly attendance data");
-      
-      // Try to calculate from existing data as fallback
-      try {
-        calculateWeeklySummaryFromExistingData(weekStart, weekEnd);
-      } catch (calcError) {
-        console.error('Fallback calculation failed:', calcError);
-        // Show empty state with all employees marked as absent
-        showEmptyWeeklySummary(weekStart, weekEnd);
-      }
-    } finally {
-      setLoadingWeekly(false);
-    }
+  const getEmployeeAttendanceRecord = (employeeId: string) => {
+    return attendanceRecords.find(record => 
+      record.employeeId === employeeId && record.date === selectedDate
+    );
   };
 
-  const fetchAllAttendanceForWeek = async (weekStart: string, weekEnd: string) => {
-    try {
-      console.log('📋 Fetching bulk attendance for week:', { weekStart, weekEnd });
-      
-      // Use the attendance range endpoint if available
-      const response = await fetch(
-        `${API_URL}/api/attendance/range?startDate=${weekStart}&endDate=${weekEnd}`
-      );
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Bulk attendance response:', data);
-        
-        if (data.success && Array.isArray(data.data)) {
-          // Process the attendance records
-          calculateWeeklySummaryFromAttendanceRecords(data.data, weekStart, weekEnd);
-          return;
-        }
-      }
-      
-      // If bulk endpoint fails, fetch day by day
-      await fetchAttendanceDayByDay(weekStart, weekEnd);
-      
-    } catch (error) {
-      console.error('Error fetching bulk attendance:', error);
-      await fetchAttendanceDayByDay(weekStart, weekEnd);
-    }
-  };
-
-  const fetchAttendanceDayByDay = async (weekStart: string, weekEnd: string) => {
-    try {
-      // Create array of all dates in the week
-      const startDate = new Date(weekStart);
-      const endDate = new Date(weekEnd);
-      const dates = [];
-      let currentDate = new Date(startDate);
-      
-      while (currentDate <= endDate) {
-        dates.push(formatDate(new Date(currentDate)));
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-      
-      // Fetch attendance for each date
-      const allAttendanceRecords: AttendanceRecord[] = [];
-      const fetchPromises = dates.map(async (date) => {
-        try {
-          const response = await fetch(`${API_URL}/api/attendance?date=${date}`);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.success && Array.isArray(data.data)) {
-              return data.data;
-            }
-          }
-        } catch (error) {
-          console.log(`Failed to fetch attendance for ${date}:`, error);
-        }
-        return [];
-      });
-      
-      // Wait for all fetches to complete
-      const results = await Promise.all(fetchPromises);
-      
-      // Flatten the results
-      results.forEach(records => {
-        if (Array.isArray(records)) {
-          allAttendanceRecords.push(...records);
-        }
-      });
-      
-      console.log(`Fetched ${allAttendanceRecords.length} attendance records for the week`);
-      
-      if (allAttendanceRecords.length > 0) {
-        calculateWeeklySummaryFromAttendanceRecords(allAttendanceRecords, weekStart, weekEnd);
-      } else {
-        // No attendance records found
-        calculateWeeklySummaryFromExistingData(weekStart, weekEnd);
-      }
-      
-    } catch (error) {
-      console.error('Error fetching day-by-day attendance:', error);
-      calculateWeeklySummaryFromExistingData(weekStart, weekEnd);
-    }
-  };
-
-  const calculateWeeklySummaryFromAttendanceRecords = (records: any[], weekStart: string, weekEnd: string) => {
-    const employeeMap = new Map<string, WeeklyAttendanceSummary>();
+  const calculateAttendanceStats = () => {
+    const records = attendanceRecords.filter(record => record.date === selectedDate);
+    const totalEmployees = filteredEmployees.length;
+    const presentCount = records.filter(r => r.status === 'present').length;
+    const absentCount = records.filter(r => r.status === 'absent').length;
+    const halfDayCount = records.filter(r => r.status === 'half-day').length;
+    const leaveCount = records.filter(r => r.status === 'leave').length;
+    const weeklyOffCount = records.filter(r => r.status === 'weekly-off').length;
+    const checkedInCount = records.filter(r => r.isCheckedIn).length;
     
-    // Initialize with all employees
-    employees.forEach(employee => {
-      employeeMap.set(employee._id, {
-        employeeId: employee._id,
-        employeeName: employee.name,
-        department: employee.department,
-        weekStartDate: weekStart,
-        weekEndDate: weekEnd,
-        daysPresent: 0,
-        daysAbsent: 0,
-        daysHalfDay: 0,
-        daysLeave: 0,
-        daysWeeklyOff: 0,
-        totalHours: 0,
-        totalBreakTime: 0,
-        overallStatus: 'absent'
-      });
-    });
-    
-    // Process all attendance records
-    records.forEach(record => {
-      const employeeId = record.employeeId || record.employee?._id;
-      if (employeeId) {
-        const summary = employeeMap.get(employeeId);
-        if (summary) {
-          const status = record.status?.toLowerCase() || 'absent';
-          
-          switch (status) {
-            case 'present':
-              summary.daysPresent++;
-              summary.totalHours += record.totalHours || 0;
-              break;
-            case 'absent':
-              summary.daysAbsent++;
-              break;
-            case 'half-day':
-            case 'halfday':
-              summary.daysHalfDay++;
-              summary.totalHours += record.totalHours || (record.totalHours || 0) / 2;
-              break;
-            case 'leave':
-              summary.daysLeave++;
-              break;
-            case 'weekly-off':
-            case 'weeklyoff':
-              summary.daysWeeklyOff++;
-              break;
-            default:
-              // If status is unknown but has check-in time, count as present
-              if (record.checkInTime) {
-                summary.daysPresent++;
-                summary.totalHours += record.totalHours || 0;
-              } else {
-                summary.daysAbsent++;
-              }
-          }
-          
-          summary.totalBreakTime += record.breakTime || 0;
-        }
-      }
-    });
-    
-    // Calculate overall status for each employee
-    const summaries = Array.from(employeeMap.values()).map(summary => {
-      const totalDays = summary.daysPresent + summary.daysAbsent + summary.daysHalfDay + 
-                       summary.daysLeave + summary.daysWeeklyOff;
-      
-      // If employee has no records for the week at all, mark as absent for all days
-      if (totalDays === 0) {
-        summary.daysAbsent = 7;
-        summary.overallStatus = 'absent';
-      } else {
-        // Calculate attendance percentage
-        const attendanceDays = summary.daysPresent + summary.daysHalfDay * 0.5;
-        const attendancePercentage = attendanceDays / totalDays;
-        
-        if (attendancePercentage >= 0.8) {
-          summary.overallStatus = 'present';
-        } else if (summary.daysAbsent / totalDays >= 0.8) {
-          summary.overallStatus = 'absent';
-        } else {
-          summary.overallStatus = 'mixed';
-        }
-        
-        // Fill remaining days as absent if total days is less than 7
-        const recordedDays = totalDays;
-        if (recordedDays < 7) {
-          summary.daysAbsent += (7 - recordedDays);
-        }
-      }
-      
-      return summary;
-    });
-    
-    console.log('Calculated weekly summaries:', summaries);
-    setWeeklySummaries(summaries);
+    return {
+      totalEmployees,
+      presentCount,
+      absentCount,
+      halfDayCount,
+      leaveCount,
+      weeklyOffCount,
+      checkedInCount,
+      attendanceRate: totalEmployees > 0 ? Math.round((presentCount / totalEmployees) * 100) : 0
+    };
   };
 
-  const calculateWeeklySummaryFromExistingData = (weekStart: string, weekEnd: string) => {
-    // Filter existing attendance records for the week
-    const weekRecords = attendanceRecords.filter(record => {
-      try {
-        const recordDate = new Date(record.date);
-        const startDate = new Date(weekStart);
-        const endDate = new Date(weekEnd);
-        return recordDate >= startDate && recordDate <= endDate;
-      } catch (error) {
-        return false;
-      }
-    });
+  const stats = calculateAttendanceStats();
 
-    const employeeMap = new Map<string, WeeklyAttendanceSummary>();
-
-    // Initialize with all employees
-    employees.forEach(employee => {
-      employeeMap.set(employee._id, {
-        employeeId: employee._id,
-        employeeName: employee.name,
-        department: employee.department,
-        weekStartDate: weekStart,
-        weekEndDate: weekEnd,
-        daysPresent: 0,
-        daysAbsent: 0,
-        daysHalfDay: 0,
-        daysLeave: 0,
-        daysWeeklyOff: 0,
-        totalHours: 0,
-        totalBreakTime: 0,
-        overallStatus: 'absent'
-      });
-    });
-
-    // Process attendance records
-    weekRecords.forEach(record => {
-      const summary = employeeMap.get(record.employeeId);
-      if (summary) {
-        switch (record.status) {
-          case 'present':
-            summary.daysPresent++;
-            summary.totalHours += record.totalHours || 0;
-            break;
-          case 'absent':
-            summary.daysAbsent++;
-            break;
-          case 'half-day':
-            summary.daysHalfDay++;
-            summary.totalHours += record.totalHours || 0;
-            break;
-          case 'leave':
-            summary.daysLeave++;
-            break;
-          case 'weekly-off':
-            summary.daysWeeklyOff++;
-            break;
-        }
-        summary.totalBreakTime += record.breakTime || 0;
-      }
-    });
-
-    // Calculate overall status
-    const summaries = Array.from(employeeMap.values()).map(summary => {
-      const totalDays = summary.daysPresent + summary.daysAbsent + summary.daysHalfDay + 
-                       summary.daysLeave + summary.daysWeeklyOff;
-      
-      if (totalDays > 0) {
-        const attendanceRate = (summary.daysPresent + summary.daysHalfDay * 0.5) / totalDays;
-        if (attendanceRate >= 0.8) {
-          summary.overallStatus = 'present';
-        } else if (summary.daysAbsent / totalDays >= 0.8) {
-          summary.overallStatus = 'absent';
-        } else {
-          summary.overallStatus = 'mixed';
-        }
-        
-        // Fill remaining days
-        if (totalDays < 7) {
-          summary.daysAbsent += (7 - totalDays);
-        }
-      } else {
-        // No attendance records for this employee
-        summary.daysAbsent = 7;
-        summary.overallStatus = 'absent';
-      }
-      
-      return summary;
-    });
-
-    console.log('Weekly summaries from existing data:', summaries);
-    setWeeklySummaries(summaries);
-  };
-
-  const showEmptyWeeklySummary = (weekStart: string, weekEnd: string) => {
-    const summaries = employees.map(employee => ({
-      employeeId: employee._id,
-      employeeName: employee.name,
-      department: employee.department,
-      weekStartDate: weekStart,
-      weekEndDate: weekEnd,
-      daysPresent: 0,
-      daysAbsent: 7,
-      daysHalfDay: 0,
-      daysLeave: 0,
-      daysWeeklyOff: 0,
-      totalHours: 0,
-      totalBreakTime: 0,
-      overallStatus: 'absent' as const
-    }));
-    
-    setWeeklySummaries(summaries);
-  };
-
-  // Load data on component mount and when date changes
-  useEffect(() => {
-    // Refresh current supervisor info
-    setCurrentSupervisor(getCurrentSupervisor());
-    
-    // Load data
-    loadSupervisorAttendance();
-    loadEmployees();
-    loadAttendanceRecords(selectedDate);
-  }, [selectedDate]);
-
-  // Load weekly summaries when week changes
-  useEffect(() => {
-    if (employees.length > 0) {
-      const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
-      const weekStart = formatDate(weekDates[0]);
-      const weekEnd = formatDate(weekDates[6]);
-      loadWeeklySummaries(weekStart, weekEnd);
-    }
-  }, [selectedYear, selectedMonth, selectedWeek, employees]);
-
-  const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
-
-  const handlePreviousWeek = () => {
-    if (selectedWeek > 1) {
-      setSelectedWeek(selectedWeek - 1);
-    } else {
-      if (selectedMonth > 0) {
-        setSelectedMonth(selectedMonth - 1);
-        setSelectedWeek(5);
-      } else {
-        setSelectedYear(selectedYear - 1);
-        setSelectedMonth(11);
-        setSelectedWeek(5);
-      }
-    }
-  };
-
-  const handleNextWeek = () => {
-    if (selectedWeek < 5) {
-      setSelectedWeek(selectedWeek + 1);
-    } else {
-      if (selectedMonth < 11) {
-        setSelectedMonth(selectedMonth + 1);
-        setSelectedWeek(1);
-      } else {
-        setSelectedYear(selectedYear + 1);
-        setSelectedMonth(0);
-        setSelectedWeek(1);
-      }
-    }
-  };
-
-  // Employee attendance functions
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'present':
@@ -1398,42 +1345,34 @@ const Attendance = () => {
     setManualAttendanceDialogOpen(true);
   };
 
-  // Update manual attendance submission
   const submitManualAttendance = async () => {
     if (!selectedEmployeeForManual) return;
 
     try {
       let totalHours = 0;
       if (manualAttendanceData.checkInTime && manualAttendanceData.checkOutTime) {
-        // Use the fixed calculation function
         totalHours = calculateTotalHours(
           `${manualAttendanceData.date}T${manualAttendanceData.checkInTime}`,
           `${manualAttendanceData.date}T${manualAttendanceData.checkOutTime}`
         );
       }
 
-      const response = await fetch(`${API_URL}/api/attendance/manual`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employeeId: selectedEmployeeForManual._id,
-          employeeName: selectedEmployeeForManual.name,
-          date: manualAttendanceData.date,
-          checkInTime: manualAttendanceData.checkInTime ? `${manualAttendanceData.date}T${manualAttendanceData.checkInTime}` : null,
-          checkOutTime: manualAttendanceData.checkOutTime ? `${manualAttendanceData.date}T${manualAttendanceData.checkOutTime}` : null,
-          breakStartTime: manualAttendanceData.breakStartTime ? `${manualAttendanceData.date}T${manualAttendanceData.breakStartTime}` : null,
-          breakEndTime: manualAttendanceData.breakEndTime ? `${manualAttendanceData.date}T${manualAttendanceData.breakEndTime}` : null,
-          status: manualAttendanceData.status,
-          remarks: manualAttendanceData.remarks,
-          totalHours: totalHours,
-          isCheckedIn: !!manualAttendanceData.checkInTime && !manualAttendanceData.checkOutTime,
-          supervisorId: currentSupervisor.supervisorId
-        }),
+      const response = await axios.post(`${API_URL}/attendance/manual`, {
+        employeeId: selectedEmployeeForManual._id,
+        employeeName: selectedEmployeeForManual.name,
+        date: manualAttendanceData.date,
+        checkInTime: manualAttendanceData.checkInTime ? `${manualAttendanceData.date}T${manualAttendanceData.checkInTime}` : null,
+        checkOutTime: manualAttendanceData.checkOutTime ? `${manualAttendanceData.date}T${manualAttendanceData.checkOutTime}` : null,
+        breakStartTime: manualAttendanceData.breakStartTime ? `${manualAttendanceData.date}T${manualAttendanceData.breakStartTime}` : null,
+        breakEndTime: manualAttendanceData.breakEndTime ? `${manualAttendanceData.date}T${manualAttendanceData.breakEndTime}` : null,
+        status: manualAttendanceData.status,
+        remarks: manualAttendanceData.remarks,
+        totalHours: totalHours,
+        isCheckedIn: !!manualAttendanceData.checkInTime && !manualAttendanceData.checkOutTime,
+        supervisorId: currentSupervisor.supervisorId
       });
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success("Attendance recorded successfully!");
@@ -1448,21 +1387,111 @@ const Attendance = () => {
     }
   };
 
-  const handleEmployeeCheckIn = async (employee: Employee) => {
+  // New function to handle status update
+  const handleStatusUpdate = (employee: Employee, attendanceRecord: AttendanceRecord | null) => {
+    setSelectedEmployeeForStatusUpdate(employee);
+    setSelectedAttendanceForStatusUpdate(attendanceRecord);
+    setStatusUpdateData({
+      employeeId: employee._id,
+      employeeName: employee.name,
+      attendanceId: attendanceRecord?._id || '',
+      currentStatus: attendanceRecord?.status || 'absent',
+      newStatus: attendanceRecord?.status || 'present',
+      date: selectedDate,
+      remarks: attendanceRecord?.remarks || ''
+    });
+    setStatusUpdateDialogOpen(true);
+  };
+
+  // Submit status update - FIXED BACKEND INTEGRATION
+  const submitStatusUpdate = async () => {
+    if (!selectedEmployeeForStatusUpdate) return;
+
     try {
-      const response = await fetch(`${API_URL}/api/attendance/checkin`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employeeId: employee._id,
-          employeeName: employee.name,
-          supervisorId: currentSupervisor.supervisorId,
-        }),
+      setUpdatingStatus(true);
+      
+      console.log('🔄 Updating attendance status:', {
+        employeeId: statusUpdateData.employeeId,
+        attendanceId: statusUpdateData.attendanceId,
+        date: statusUpdateData.date,
+        newStatus: statusUpdateData.newStatus,
+        remarks: statusUpdateData.remarks,
+        supervisorId: currentSupervisor.supervisorId
       });
 
-      const data = await response.json();
+      // Make API call to update status
+      const response = await axios.post(`${API_URL}/attendance/update-status`, {
+        employeeId: statusUpdateData.employeeId,
+        attendanceId: statusUpdateData.attendanceId || null,
+        date: statusUpdateData.date,
+        status: statusUpdateData.newStatus,
+        remarks: statusUpdateData.remarks,
+        supervisorId: currentSupervisor.supervisorId,
+        employeeName: selectedEmployeeForStatusUpdate.name
+      });
+
+      const data = response.data;
+      
+      if (data.success) {
+        toast.success(`Status updated to ${statusUpdateData.newStatus.replace('-', ' ')} for ${selectedEmployeeForStatusUpdate.name}`);
+        setStatusUpdateDialogOpen(false);
+        
+        // Refresh attendance records
+        await loadAttendanceRecords(selectedDate);
+        
+        // Also refresh weekly summaries
+        const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
+        const weekStart = formatDate(weekDates[0]);
+        const weekEnd = formatDate(weekDates[6]);
+        await loadWeeklySummaries(weekStart, weekEnd);
+        
+        console.log('✅ Status update successful:', data);
+      } else {
+        console.error('Status update failed:', data.message);
+        toast.error(data.message || "Error updating status");
+      }
+    } catch (error: any) {
+      console.error('Error updating status:', error);
+      
+      // More detailed error handling
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error('Error response data:', error.response.data);
+        console.error('Error response status:', error.response.status);
+        
+        if (error.response.status === 404) {
+          toast.error("Status update API endpoint not found. Please check backend configuration.");
+        } else if (error.response.status === 500) {
+          toast.error(`Server error: ${error.response.data.message || "Internal server error"}`);
+        } else {
+          toast.error(`Error: ${error.response.data.message || "Failed to update status"}`);
+        }
+      } else if (error.request) {
+        // The request was made but no response was received
+        console.error('No response received:', error.request);
+        toast.error("No response from server. Please check if backend is running.");
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error('Error message:', error.message);
+        toast.error(`Error: ${error.message}`);
+      }
+      
+      // Don't fallback to demo mode - show error and let user try again
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  const handleEmployeeCheckIn = async (employee: Employee) => {
+    try {
+      const response = await axios.post(`${API_URL}/attendance/checkin`, {
+        employeeId: employee._id,
+        employeeName: employee.name,
+        supervisorId: currentSupervisor.supervisorId,
+      });
+
+      const data = response.data;
       
       if (data.success) {
         toast.success(`${employee.name} checked in successfully!`);
@@ -1478,17 +1507,11 @@ const Attendance = () => {
 
   const handleEmployeeCheckOut = async (employee: Employee) => {
     try {
-      const response = await fetch(`${API_URL}/api/attendance/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employeeId: employee._id,
-        }),
+      const response = await axios.post(`${API_URL}/attendance/checkout`, {
+        employeeId: employee._id,
       });
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success(`${employee.name} checked out successfully!`);
@@ -1504,17 +1527,11 @@ const Attendance = () => {
 
   const handleEmployeeBreakIn = async (employee: Employee) => {
     try {
-      const response = await fetch(`${API_URL}/api/attendance/breakin`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employeeId: employee._id,
-        }),
+      const response = await axios.post(`${API_URL}/attendance/breakin`, {
+        employeeId: employee._id,
       });
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success(`${employee.name} break started!`);
@@ -1530,17 +1547,11 @@ const Attendance = () => {
 
   const handleEmployeeBreakOut = async (employee: Employee) => {
     try {
-      const response = await fetch(`${API_URL}/api/attendance/breakout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employeeId: employee._id,
-        }),
+      const response = await axios.post(`${API_URL}/attendance/breakout`, {
+        employeeId: employee._id,
       });
 
-      const data = await response.json();
+      const data = response.data;
       
       if (data.success) {
         toast.success(`${employee.name} break ended!`);
@@ -1554,83 +1565,129 @@ const Attendance = () => {
     }
   };
 
-  const filteredEmployees = employees.filter(employee => {
-    const matchesSearch = 
-      employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      employee.employeeId.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesDepartment = selectedDepartment === "all" || employee.department === selectedDepartment;
-    const matchesSite = selectedSite === "all" || employee.siteName === selectedSite;
-    
-    return matchesSearch && matchesDepartment && matchesSite;
-  });
-
-  const departments = Array.from(new Set(employees.map(emp => emp.department))).filter(Boolean);
-  const sites = Array.from(new Set(employees.map(emp => emp.siteName))).filter(Boolean);
-
-  const clearFilters = () => {
-    setSearchQuery("");
-    setSelectedDepartment("all");
-    setSelectedSite("all");
+  const handlePreviousWeek = () => {
+    if (selectedWeek > 1) {
+      setSelectedWeek(selectedWeek - 1);
+    } else {
+      if (selectedMonth > 0) {
+        setSelectedMonth(selectedMonth - 1);
+        setSelectedWeek(5);
+      } else {
+        setSelectedYear(selectedYear - 1);
+        setSelectedMonth(11);
+        setSelectedWeek(5);
+      }
+    }
   };
 
-  const getEmployeeAttendanceRecord = (employeeId: string) => {
-    return attendanceRecords.find(record => 
-      record.employeeId === employeeId && record.date === selectedDate
-    );
+  const handleNextWeek = () => {
+    if (selectedWeek < 5) {
+      setSelectedWeek(selectedWeek + 1);
+    } else {
+      if (selectedMonth < 11) {
+        setSelectedMonth(selectedMonth + 1);
+        setSelectedWeek(1);
+      } else {
+        setSelectedYear(selectedYear + 1);
+        setSelectedMonth(0);
+        setSelectedWeek(1);
+      }
+    }
   };
 
-  const calculateAttendanceStats = () => {
-    const records = attendanceRecords.filter(record => record.date === selectedDate);
-    const totalEmployees = filteredEmployees.length;
-    const presentCount = records.filter(r => r.status === 'present').length;
-    const absentCount = records.filter(r => r.status === 'absent').length;
-    const halfDayCount = records.filter(r => r.status === 'half-day').length;
-    const leaveCount = records.filter(r => r.status === 'leave').length;
-    const weeklyOffCount = records.filter(r => r.status === 'weekly-off').length;
-    const checkedInCount = records.filter(r => r.isCheckedIn).length;
+  const handleRefresh = async () => {
+    toast.info("Refreshing data...");
     
-    return {
-      totalEmployees,
-      presentCount,
-      absentCount,
-      halfDayCount,
-      leaveCount,
-      weeklyOffCount,
-      checkedInCount,
-      attendanceRate: totalEmployees > 0 ? Math.round((presentCount / totalEmployees) * 100) : 0
-    };
-  };
-
-  const stats = calculateAttendanceStats();
-
-  const sortedAttendanceData = [...supervisorAttendance].sort((a, b) => 
-    new Date(b.date).getTime() - new Date(a.date).getTime()
-  );
-
-  const handleRefresh = () => {
     // Refresh current supervisor info
-    setCurrentSupervisor(getCurrentSupervisor());
+    if (currentUser) {
+      setCurrentSupervisor({
+        id: currentUser._id || currentUser.id || '',
+        name: currentUser.name || 'Supervisor',
+        supervisorId: currentUser._id || currentUser.id || '',
+        email: currentUser.email || ''
+      });
+    }
     
     // Refresh data
-    loadSupervisorAttendance();
-    loadEmployees();
-    loadAttendanceRecords(selectedDate);
+    await fetchAllSites();
+    await fetchEmployees();
+    await loadSupervisorAttendance();
+    await loadAttendanceRecords(selectedDate);
     
     // Also refresh weekly data
     const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
     const weekStart = formatDate(weekDates[0]);
     const weekEnd = formatDate(weekDates[6]);
-    loadWeeklySummaries(weekStart, weekEnd);
+    await loadWeeklySummaries(weekStart, weekEnd);
     
     toast.success("Attendance data refreshed!");
   };
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setSelectedSiteFilter("all");
+    setSelectedDepartment("all");
+  };
+
+  const departments = Array.from(new Set(employees.map(emp => emp.department))).filter(Boolean);
+  const siteOptions = Array.from(new Set(employees.map(emp => emp.siteName))).filter(Boolean);
+
+  const sortedAttendanceData = [...supervisorAttendance].sort((a, b) => 
+    new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+
+  const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
+
+  // Load weekly summaries when week changes
+  useEffect(() => {
+    if (employees.length > 0) {
+      const weekDates = getWeekDates(selectedYear, selectedMonth, selectedWeek);
+      const weekStart = formatDate(weekDates[0]);
+      const weekEnd = formatDate(weekDates[6]);
+      loadWeeklySummaries(weekStart, weekEnd);
+    }
+  }, [selectedYear, selectedMonth, selectedWeek, employees]);
+
+  // Load attendance records when date changes
+  useEffect(() => {
+    loadAttendanceRecords(selectedDate);
+  }, [selectedDate]);
+
+  // Check if user is a supervisor
+  if (!isAuthenticated || !currentUser) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+          <h2 className="text-xl font-semibold mb-2">Access Denied</h2>
+          <p className="text-muted-foreground">Please login to access this page</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUser.role !== "supervisor") {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="h-12 w-12 text-primary mx-auto mb-4" />
+          <h2 className="text-xl font-semibold mb-2">Access Restricted</h2>
+          <p className="text-muted-foreground mb-4">This page is only accessible to supervisors</p>
+          <div className="space-y-2">
+            <Badge variant="outline" className="text-lg capitalize">
+              Your role: {currentUser.role}
+            </Badge>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loadingSupervisor && activeTab === "my-attendance") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary mb-4" />
           <p className="text-muted-foreground">Loading attendance data...</p>
         </div>
       </div>
@@ -1646,36 +1703,190 @@ const Attendance = () => {
         animate={{ opacity: 1, y: 0 }}
         className="p-6 space-y-6"
       >
-        {/* Current User Info */}
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-full bg-blue-100 dark:bg-blue-800">
-                <Shield className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              </div>
+        {/* Supervisor Info Card */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h3 className="font-medium text-blue-800 dark:text-blue-300">
-                  Current User: {currentSupervisor.name}
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-primary" />
+                  {currentSupervisor.name}
                 </h3>
-                <p className="text-sm text-blue-600 dark:text-blue-400">
-                  ID: {currentSupervisor.id} | Role: Supervisor
-                </p>
-                <p className="text-xs text-blue-500 dark:text-blue-300 mt-1">
-                  Viewing your attendance data only
-                </p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Badge variant="default" className="text-sm capitalize">
+                    <Crown className="h-3 w-3 mr-1" />
+                    {currentUser.role}
+                  </Badge>
+                  {supervisorSites.length > 0 ? (
+                    <Badge variant="outline" className="text-sm">
+                      <Building className="h-3 w-3 mr-1" />
+                      Task-Assigned Sites: {supervisorSites.length}
+                    </Badge>
+                  ) : (
+                    <Badge variant="destructive" className="text-sm">
+                      <AlertTriangle className="h-3 w-3 mr-1" />
+                      No Task-Assigned Sites
+                    </Badge>
+                  )}
+                  {currentSupervisor.email && (
+                    <Badge variant="outline" className="text-sm">
+                      <Mail className="h-3 w-3 mr-1" />
+                      {currentSupervisor.email}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDebug(!showDebug)}
+                    className="text-xs"
+                  >
+                    <Info className="h-3 w-3 mr-1" />
+                    Debug
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowFilters(!showFilters)}
+                    className="text-xs"
+                  >
+                    <Search className="h-3 w-3 mr-1" />
+                    Filters
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRefresh}
+                    disabled={loadingEmployees || loadingAttendance}
+                    className="text-xs"
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${loadingEmployees ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {filteredEmployees.length} employees • {supervisorSites.length} task-assigned site(s)
+                </div>
               </div>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRefresh}
-              className="border-blue-300 text-blue-700 hover:bg-blue-100"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh All
-            </Button>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
+
+        {/* Debug Info */}
+        {showDebug && debugInfo && (
+          <Card className="bg-black/5 border-muted">
+            <CardContent className="pt-6">
+              <h4 className="font-semibold mb-2">Debug Information</h4>
+              <pre className="text-xs bg-black/10 p-4 rounded overflow-auto max-h-96">
+                {JSON.stringify(debugInfo, null, 2)}
+              </pre>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Task-Assigned Sites Info */}
+        {supervisorSites.length > 0 ? (
+          <Card className="bg-primary/5 border-primary/20">
+            <CardContent className="pt-6">
+              <div className="flex items-start gap-3">
+                <Target className="h-5 w-5 text-primary mt-0.5" />
+                <div>
+                  <h4 className="font-semibold">Sites from Your Task Assignments</h4>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    You have tasks assigned at these sites. Showing employees from these sites only.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {supervisorSites.map(site => (
+                      <Badge key={site._id} variant="outline" className="bg-white">
+                        {site.name}
+                        {site.clientName && <span className="ml-1 text-muted-foreground">({site.clientName})</span>}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="bg-yellow-50 border-yellow-200">
+            <CardContent className="pt-6">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5" />
+                <div>
+                  <h4 className="font-semibold text-yellow-800">No Task-Assigned Sites Found</h4>
+                  <p className="text-sm text-yellow-700">
+                    You don't have any tasks assigned to you yet. No employees will be shown until you are assigned to tasks.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Filters */}
+        {showFilters && (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Search</label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search employees..."
+                      className="pl-10"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Site</label>
+                  <Select value={selectedSiteFilter} onValueChange={setSelectedSiteFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Sites" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Sites</SelectItem>
+                      {siteOptions.map(site => (
+                        <SelectItem key={site} value={site}>{site}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Department</label>
+                  <Select value={selectedDepartment} onValueChange={setSelectedDepartment}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All Departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Departments</SelectItem>
+                      {departments.map(dept => (
+                        <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              
+              <div className="flex justify-end mt-4">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={clearFilters}
+                >
+                  Clear Filters
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {apiError && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center gap-3">
@@ -1913,7 +2124,7 @@ const Attendance = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">{stats.totalEmployees}</div>
-                  <p className="text-xs text-muted-foreground">All departments</p>
+                  <p className="text-xs text-muted-foreground">From task-assigned sites</p>
                 </CardContent>
               </Card>
               <Card>
@@ -1976,52 +2187,45 @@ const Attendance = () => {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4 mb-6">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search employees by name or ID..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Select value={selectedDepartment} onValueChange={setSelectedDepartment}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Filter by Department" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Departments</SelectItem>
-                        {departments.map(dept => (
-                          <SelectItem key={dept} value={dept}>{dept}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={selectedSite} onValueChange={setSelectedSite}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Filter by Site" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Sites</SelectItem>
-                        {sites.map(site => (
-                          <SelectItem key={site} value={site}>{site}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Button variant="outline" onClick={clearFilters} className="w-full">
-                      Clear Filters
-                    </Button>
-                  </div>
-                </div>
-
                 {loadingEmployees || loadingAttendance ? (
                   <div className="flex justify-center items-center py-8">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     <span className="ml-2">Loading data...</span>
+                  </div>
+                ) : filteredEmployees.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                    <p className="text-muted-foreground">No employees found for your task-assigned sites</p>
+                    {supervisorSites.length > 0 ? (
+                      <div className="mt-4">
+                        <p className="text-sm text-muted-foreground mb-2">Your task-assigned sites:</p>
+                        <div className="flex flex-wrap justify-center gap-2">
+                          {supervisorSites.map(site => (
+                            <Badge key={site._id} variant="outline">
+                              {site.name}
+                            </Badge>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-4">
+                          No employees are currently assigned to these sites.
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-muted-foreground">You don't have any sites assigned through tasks.</p>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Please contact your administrator to assign you to tasks.
+                        </p>
+                      </div>
+                    )}
+                    <Button
+                      variant="outline"
+                      onClick={handleRefresh}
+                      className="mt-4"
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Refresh
+                    </Button>
                   </div>
                 ) : (
                   <>
@@ -2055,7 +2259,11 @@ const Attendance = () => {
                                     </div>
                                   </TableCell>
                                   <TableCell>{employee.department}</TableCell>
-                                  <TableCell>{employee.siteName}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className="max-w-[150px] truncate">
+                                      {employee.siteName || 'Not Assigned'}
+                                    </Badge>
+                                  </TableCell>
                                   <TableCell>
                                     {attendanceRecord?.checkInTime ? (
                                       <div className="flex items-center gap-2">
@@ -2100,14 +2308,27 @@ const Attendance = () => {
                                     {attendanceRecord?.totalHours ? formatHours(attendanceRecord.totalHours) : "-"}
                                   </TableCell>
                                   <TableCell>
-                                    {attendanceRecord ? (
-                                      <Badge className={getStatusBadge(attendanceRecord.status)}>
-                                        {getStatusIcon(attendanceRecord.status)}
-                                        {attendanceRecord.status.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                      </Badge>
-                                    ) : (
-                                      <Badge variant="outline">No Record</Badge>
-                                    )}
+                                    <div className="flex items-center gap-2">
+                                      {attendanceRecord ? (
+                                        <Badge className={getStatusBadge(attendanceRecord.status)}>
+                                          {getStatusIcon(attendanceRecord.status)}
+                                          {attendanceRecord.status.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline">No Record</Badge>
+                                      )}
+                                      {/* Status Update Button */}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 w-6 p-0"
+                                        onClick={() => handleStatusUpdate(employee, attendanceRecord || null)}
+                                        title="Update Status"
+                                        disabled={updatingStatus}
+                                      >
+                                        <Edit className="h-3 w-3" />
+                                      </Button>
+                                    </div>
                                   </TableCell>
                                   <TableCell className="text-right">
                                     <div className="flex justify-end gap-2">
@@ -2161,14 +2382,6 @@ const Attendance = () => {
                                 </TableRow>
                               );
                             })}
-                            
-                            {filteredEmployees.length === 0 && (
-                              <TableRow>
-                                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                                  {employees.length === 0 ? "No employees found in database" : "No employees found matching your filters."}
-                                </TableCell>
-                              </TableRow>
-                            )}
                           </TableBody>
                         </Table>
                       </div>
@@ -2299,83 +2512,37 @@ const Attendance = () => {
                           </TableHeader>
                           <TableBody>
                             {weeklySummaries.length > 0 ? (
-                              weeklySummaries.map((summary) => {
-                                // Calculate actual total days recorded
-                                const totalRecordedDays = summary.daysPresent + summary.daysAbsent + 
-                                                         summary.daysHalfDay + summary.daysLeave + summary.daysWeeklyOff;
-                                
-                                // If no days recorded at all, show 0 for all instead of defaulting to 7 absent
-                                const displayAbsent = totalRecordedDays === 0 ? 0 : summary.daysAbsent;
-                                
-                                return (
-                                  <TableRow key={summary.employeeId}>
-                                    <TableCell className="font-medium">
-                                      {summary.employeeName}
-                                    </TableCell>
-                                    <TableCell>
-                                      <span className="text-sm text-muted-foreground">{summary.employeeId}</span>
-                                    </TableCell>
-                                    <TableCell>{summary.department}</TableCell>
-                                    <TableCell>
-                                      <div className="text-green-600 font-medium">{summary.daysPresent}</div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="text-red-600 font-medium">{displayAbsent}</div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="text-yellow-600 font-medium">{summary.daysHalfDay}</div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="text-blue-600 font-medium">{summary.daysLeave}</div>
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="text-purple-600 font-medium">{summary.daysWeeklyOff}</div>
-                                    </TableCell>
-                                    <TableCell className="text-right font-medium">
-                                      {summary.totalHours.toFixed(2)} hrs
-                                    </TableCell>
-                                    <TableCell>
-                                      <Badge className={getStatusBadge(summary.overallStatus)}>
-                                        {getStatusIcon(summary.overallStatus)}
-                                        {summary.overallStatus.charAt(0).toUpperCase() + summary.overallStatus.slice(1)}
-                                      </Badge>
-                                    </TableCell>
-                                  </TableRow>
-                                );
-                              })
-                            ) : employees.length > 0 ? (
-                              // Show employees with 0 for all when no weekly data
-                              employees.map((employee) => (
-                                <TableRow key={employee._id}>
+                              weeklySummaries.map((summary) => (
+                                <TableRow key={summary.employeeId}>
                                   <TableCell className="font-medium">
-                                    {employee.name}
+                                    {summary.employeeName}
                                   </TableCell>
                                   <TableCell>
-                                    <span className="text-sm text-muted-foreground">{employee.employeeId}</span>
+                                    <span className="text-sm text-muted-foreground">{summary.employeeId}</span>
                                   </TableCell>
-                                  <TableCell>{employee.department}</TableCell>
+                                  <TableCell>{summary.department}</TableCell>
                                   <TableCell>
-                                    <div className="text-green-600 font-medium">0</div>
-                                  </TableCell>
-                                  <TableCell>
-                                    <div className="text-red-600 font-medium">0</div>
+                                    <div className="text-green-600 font-medium">{summary.daysPresent}</div>
                                   </TableCell>
                                   <TableCell>
-                                    <div className="text-yellow-600 font-medium">0</div>
+                                    <div className="text-red-600 font-medium">{summary.daysAbsent}</div>
                                   </TableCell>
                                   <TableCell>
-                                    <div className="text-blue-600 font-medium">0</div>
+                                    <div className="text-yellow-600 font-medium">{summary.daysHalfDay}</div>
                                   </TableCell>
                                   <TableCell>
-                                    <div className="text-purple-600 font-medium">0</div>
+                                    <div className="text-blue-600 font-medium">{summary.daysLeave}</div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="text-purple-600 font-medium">{summary.daysWeeklyOff}</div>
                                   </TableCell>
                                   <TableCell className="text-right font-medium">
-                                    0.00 hrs
+                                    {summary.totalHours.toFixed(2)} hrs
                                   </TableCell>
                                   <TableCell>
-                                    <Badge className={getStatusBadge('absent')}>
-                                      {getStatusIcon('absent')}
-                                      No Data
+                                    <Badge className={getStatusBadge(summary.overallStatus)}>
+                                      {getStatusIcon(summary.overallStatus)}
+                                      {summary.overallStatus.charAt(0).toUpperCase() + summary.overallStatus.slice(1)}
                                     </Badge>
                                   </TableCell>
                                 </TableRow>
@@ -2383,7 +2550,7 @@ const Attendance = () => {
                             ) : (
                               <TableRow>
                                 <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                                  No employees found. Please load employee data first.
+                                  No weekly attendance data available.
                                 </TableCell>
                               </TableRow>
                             )}
@@ -2417,14 +2584,14 @@ const Attendance = () => {
                             {(() => {
                               const bestEmp = weeklySummaries.reduce((best, emp) => 
                                 emp.daysPresent > best.daysPresent ? emp : best
-                              , weeklySummaries[0]);
-                              return bestEmp ? `${bestEmp.daysPresent}/7` : "0/7";
+                              , weeklySummaries[0] || { daysPresent: 0, employeeName: 'N/A' });
+                              return `${bestEmp.daysPresent}/7`;
                             })()}
                           </div>
                           <div className="text-sm text-muted-foreground">
                             {weeklySummaries.reduce((best, emp) => 
                               emp.daysPresent > best.daysPresent ? emp : best
-                            , weeklySummaries[0])?.employeeName || "N/A"}
+                            , weeklySummaries[0] || { daysPresent: 0, employeeName: 'N/A' }).employeeName || "N/A"}
                           </div>
                         </CardContent>
                       </Card>
@@ -2560,6 +2727,115 @@ const Attendance = () => {
             </Button>
             <Button onClick={submitManualAttendance}>
               Save Attendance
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Status Update Dialog */}
+      <Dialog open={statusUpdateDialogOpen} onOpenChange={setStatusUpdateDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Update Attendance Status</DialogTitle>
+            <DialogDescription>
+              Update status for {selectedEmployeeForStatusUpdate?.name}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div>
+              <Label>Date</Label>
+              <Input
+                type="date"
+                value={statusUpdateData.date}
+                onChange={(e) => setStatusUpdateData({...statusUpdateData, date: e.target.value})}
+              />
+            </div>
+            
+            <div>
+              <Label>Current Status</Label>
+              <div className="p-2 border rounded-md bg-gray-50">
+                <Badge className={getStatusBadge(statusUpdateData.currentStatus)}>
+                  {getStatusIcon(statusUpdateData.currentStatus)}
+                  {statusUpdateData.currentStatus.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                </Badge>
+              </div>
+            </div>
+            
+            <div>
+              <Label htmlFor="new-status">New Status</Label>
+              <Select
+                value={statusUpdateData.newStatus}
+                onValueChange={(value: 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off') => 
+                  setStatusUpdateData({...statusUpdateData, newStatus: value})
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select new status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="present">
+                    <div className="flex items-center">
+                      <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                      Present
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="absent">
+                    <div className="flex items-center">
+                      <XCircle className="mr-2 h-4 w-4 text-red-600" />
+                      Absent
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="half-day">
+                    <div className="flex items-center">
+                      <Clock className="mr-2 h-4 w-4 text-yellow-600" />
+                      Half Day
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="leave">
+                    <div className="flex items-center">
+                      <Calendar className="mr-2 h-4 w-4 text-blue-600" />
+                      Leave
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="weekly-off">
+                    <div className="flex items-center">
+                      <Calendar className="mr-2 h-4 w-4 text-purple-600" />
+                      Weekly Off
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div>
+              <Label htmlFor="status-remarks">Remarks</Label>
+              <Textarea
+                id="status-remarks"
+                value={statusUpdateData.remarks}
+                onChange={(e) => setStatusUpdateData({...statusUpdateData, remarks: e.target.value})}
+                placeholder="Enter reason for status update..."
+                rows={3}
+              />
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStatusUpdateDialogOpen(false)} disabled={updatingStatus}>
+              Cancel
+            </Button>
+            <Button onClick={submitStatusUpdate} disabled={updatingStatus}>
+              {updatingStatus ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" />
+                  Update Status
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

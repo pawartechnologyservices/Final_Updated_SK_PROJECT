@@ -1,1338 +1,1086 @@
 import { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
-import { useOutletContext } from "react-router-dom";
-import { useRole } from "@/context/RoleContext";
 import { DashboardHeader } from "@/components/shared/DashboardHeader";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Plus,
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Label } from "@/components/ui/label";
+import { 
+  Building, 
+  Users, 
+  UserCheck, 
+  UserX, 
+  UserPlus,
   Search,
-  Edit,
-  Mail,
-  Phone,
-  MapPin,
-  Users,
-  Building,
-  UserCheck,
   RefreshCw,
-  Shield,
-  Briefcase,
   Loader2,
+  MapPin,
+  Briefcase,
   AlertCircle,
+  Eye,
+  Phone,
+  Mail,
+  Shield,
+  UserCog,
+  Calendar,
+  Clock,
+  ChevronDown,
+  ChevronRight,
   FileText,
   CheckCircle,
   XCircle,
-  Clock,
-  List,
-  Calendar,
-  UserPlus,
-  Database,
+  Plus,
+  Edit,
+  Trash2,
+  TrendingUp,
+  Filter
 } from "lucide-react";
 import { toast } from "sonner";
-import { motion } from "framer-motion";
-import supervisorService, {
-  Supervisor,
-  CreateSupervisorData,
-  UpdateSupervisorData,
-} from "@/services/supervisorService";
-import { siteService, Site } from "@/services/SiteService";
-import { taskService, Assignee, Task } from "@/services/TaskService";
+import { useRole } from "@/context/RoleContext";
+import { siteService } from "@/services/SiteService";
+import taskService from "@/services/TaskService";
+import supervisorService, { Supervisor as ImportedSupervisor, CreateSupervisorData } from "@/services/supervisorService";
 
-/* ------------------------------------------------------------------ */
-/* SCHEMAS */
-/* ------------------------------------------------------------------ */
-
-const createSupervisorSchema = z.object({
-  name: z.string().min(2),
-  email: z.string().email(),
-  phone: z.string().min(10),
-  password: z.string().min(6),
-  department: z.string(),
-  site: z.string(),
-});
-
-const updateSupervisorSchema = createSupervisorSchema.extend({
-  password: z.string().optional(),
-});
-
-type CreateFormData = z.infer<typeof createSupervisorSchema>;
-type UpdateFormData = z.infer<typeof updateSupervisorSchema>;
-
-const departments = [
-  "Operations",
-  "IT",
-  "HR",
-  "Finance",
-  "Marketing",
-  "Sales",
-  "Admin",
-];
-
-/* ------------------------------------------------------------------ */
-/* TYPES */
-/* ------------------------------------------------------------------ */
-
-interface EnhancedSupervisor extends Supervisor {
-  // Task-related information
-  assignedTasks?: Task[];
-  pendingTasks?: number;
-  inProgressTasks?: number;
-  completedTasks?: number;
-  overdueTasks?: number;
-  // Site info from tasks
-  primarySite?: string;
+// Types
+interface Supervisor {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'supervisor';
+  status: 'active' | 'inactive';
   assignedSites?: string[];
+  currentTasks?: number;
+  completedTasks?: number;
+  tasks?: any[];
+  lastActive?: string;
+  department?: string;
+  joinDate?: string;
+  reportsTo?: string;
+  assignedManagers?: string[];
+  isActive?: boolean;
 }
 
-/* ------------------------------------------------------------------ */
-/* COMPONENT */
-/* ------------------------------------------------------------------ */
+interface SiteWithSupervisors {
+  _id: string;
+  name: string;
+  clientName: string;
+  location: string;
+  status: string;
+  managerCount?: number;
+  supervisorCount?: number;
+  requiredSupervisors: number;
+  assignedSupervisors: Supervisor[];
+  availableSupervisors: Supervisor[];
+  totalSupervisors: number;
+  pendingTasks: number;
+  inProgressTasks: number;
+  completedTasks: number;
+  staffingStatus: 'fully-staffed' | 'partially-staffed' | 'under-staffed' | 'over-staffed';
+}
 
-const Supervisors = () => {
-  const { onMenuClick } = useOutletContext<{ onMenuClick: () => void }>();
-  const { user: currentUser, role } = useRole();
-
-  const [activeTab, setActiveTab] = useState<string>("task-supervisors");
-  const [supervisors, setSupervisors] = useState<EnhancedSupervisor[]>([]);
-  const [managedSupervisors, setManagedSupervisors] = useState<Supervisor[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingManaged, setLoadingManaged] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSupervisor, setEditingSupervisor] = useState<Supervisor | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchQueryManaged, setSearchQueryManaged] = useState("");
+// Helper function to calculate supervisor count from staffDeployment
+const calculateSupervisorCount = (site: any): number => {
+  if (!site) return 2; // Default fallback
   
-  // Site selection state
-  const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSiteId, setSelectedSiteId] = useState<string>("");
-  const [selectedSiteName, setSelectedSiteName] = useState<string>("");
-  const [canCreateSupervisor, setCanCreateSupervisor] = useState(false);
+  // First check if supervisorCount is directly available (from ExtendedSite)
+  if (site.supervisorCount !== undefined && site.supervisorCount > 0) {
+    return site.supervisorCount;
+  }
+  
+  // Otherwise calculate from staffDeployment
+  if (site.staffDeployment && Array.isArray(site.staffDeployment)) {
+    const supervisorStaff = site.staffDeployment.find(
+      (staff: any) => staff.role && staff.role.toLowerCase().includes('supervisor')
+    );
+    
+    if (supervisorStaff && supervisorStaff.count) {
+      return Number(supervisorStaff.count) || 2;
+    }
+  }
+  
+  return 2; // Default fallback
+};
+
+const ManagerSiteSupervisorsPage = () => {
+  const { user: authUser, isAuthenticated } = useRole();
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [assignees, setAssignees] = useState<Assignee[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loadingTasks, setLoadingTasks] = useState(false);
-
-  /* ------------------------------------------------------------------ */
-  /* FORM */
-  /* ------------------------------------------------------------------ */
-
-  const form = useForm<CreateFormData | UpdateFormData>({
-    resolver: zodResolver(
-      editingSupervisor
-        ? updateSupervisorSchema
-        : createSupervisorSchema
-    ),
-    defaultValues: {
-      name: "",
-      email: "",
-      phone: "",
-      password: "",
-      department: "Operations",
-      site: "",
-    },
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sites, setSites] = useState<SiteWithSupervisors[]>([]);
+  const [allSupervisors, setAllSupervisors] = useState<Supervisor[]>([]);
+  const [addedSupervisors, setAddedSupervisors] = useState<Supervisor[]>([]);
+  const [selectedSite, setSelectedSite] = useState<SiteWithSupervisors | null>(null);
+  const [showSiteDetails, setShowSiteDetails] = useState(false);
+  const [activeTab, setActiveTab] = useState("site-supervisors");
+  const [showAddSupervisorDialog, setShowAddSupervisorDialog] = useState(false);
+  const [editingSupervisor, setEditingSupervisor] = useState<Supervisor | null>(null);
+  
+  // Form state for adding/editing supervisor
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    password: '',
+    department: '',
+    status: 'active' as 'active' | 'inactive'
   });
 
-  /* ------------------------------------------------------------------ */
-  /* FETCH MANAGED SUPERVISORS (FROM SUPERVISOR SERVICE) */
-  /* ------------------------------------------------------------------ */
-
-  const fetchManagedSupervisors = async () => {
-    try {
-      setLoadingManaged(true);
-      const supervisors = await supervisorService.getAllSupervisors();
-      
-      // Filter by site if needed
-      let filteredSupervisors = supervisors;
-      
-      if (selectedSiteId !== "all" && selectedSiteName) {
-        filteredSupervisors = supervisors.filter(supervisor => 
-          supervisor.site === selectedSiteName
-        );
-      }
-      
-      // Exclude current user if they are a supervisor
-      if (role === "supervisor" && currentUser) {
-        filteredSupervisors = filteredSupervisors.filter(s => 
-          s.email.toLowerCase() !== currentUser.email?.toLowerCase()
-        );
-      }
-      
-      setManagedSupervisors(filteredSupervisors);
-    } catch (error: any) {
-      console.error("Error fetching managed supervisors:", error);
-      toast.error("Could not load managed supervisors");
-      setManagedSupervisors([]);
-    } finally {
-      setLoadingManaged(false);
+  useEffect(() => {
+    if (authUser && isAuthenticated) {
+      fetchData();
+      fetchAddedSupervisors();
+    } else {
+      setLoading(false);
     }
-  };
+  }, [authUser, isAuthenticated]);
 
-  /* ------------------------------------------------------------------ */
-  /* FETCH TASKS (USING assignedTo FIELD) */
-  /* ------------------------------------------------------------------ */
-
-  const fetchAllTasks = async () => {
-    try {
-      setLoadingTasks(true);
-      const allTasks = await taskService.getAllTasks();
-      setTasks(allTasks);
-      return allTasks;
-    } catch (error: any) {
-      console.error("Error fetching tasks:", error);
-      toast.error("Could not load tasks. Some supervisor data may be incomplete.");
-      return [];
-    } finally {
-      setLoadingTasks(false);
-    }
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* FETCH ASSIGNEES FROM TASK SERVICE */
-  /* ------------------------------------------------------------------ */
-
-  const fetchAssignees = async () => {
-    try {
-      const allAssignees = await taskService.getAllAssignees();
-      // Filter for supervisors only
-      const supervisorAssignees = allAssignees.filter(
-        assignee => assignee.role === "supervisor"
-      );
-      setAssignees(supervisorAssignees);
-      return supervisorAssignees;
-    } catch (error: any) {
-      console.error("Error fetching assignees:", error);
-      toast.error("Could not load assignees. Check if TaskService API is running.");
-      return [];
-    }
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* FETCH SITES */
-  /* ------------------------------------------------------------------ */
-
-  const fetchSites = async () => {
-    try {
-      const sitesData = await siteService.getAllSites();
-      
-      if (!Array.isArray(sitesData)) {
-        console.error("Sites data is not an array:", sitesData);
-        toast.error("Invalid sites data format");
-        setSites([]);
-        return;
-      }
-      
-      const activeSites = sitesData.filter(site => site.status === 'active');
-      setSites(activeSites);
-      
-      // Set default site selection
-      if (activeSites.length > 0) {
-        if (role === "manager" || role === "supervisor") {
-          // Find user's site
-          const userSite = activeSites.find(s => 
-            s.name === currentUser?.site
-          );
-          
-          if (userSite) {
-            setSelectedSiteId(userSite._id);
-            setSelectedSiteName(userSite.name);
-            form.setValue("site", userSite.name);
-          } else {
-            // Fallback to first site
-            const firstSite = activeSites[0];
-            setSelectedSiteId(firstSite._id);
-            setSelectedSiteName(firstSite.name);
-            form.setValue("site", firstSite.name);
-          }
-        } else {
-          // For admin/superadmin, select first site
-          const firstSite = activeSites[0];
-          setSelectedSiteId(firstSite._id);
-          setSelectedSiteName(firstSite.name);
-          form.setValue("site", firstSite.name);
-        }
-      }
-      
-    } catch (error: any) {
-      console.error("Error fetching sites:", error);
-      toast.error(`Failed to load sites: ${error.message}`);
-      setSites([]);
-    }
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* EXTRACT SUPERVISORS FROM TASKS (USING assignedTo FIELD) */
-  /* ------------------------------------------------------------------ */
-
-  const extractSupervisorsFromTasks = (tasks: Task[], assignees: Assignee[]) => {
-    // Group tasks by assignee
-    const tasksByAssignee = new Map<string, {
-      supervisorInfo: Partial<EnhancedSupervisor>;
-      tasks: Task[];
-      sites: Set<string>;
-    }>();
-    
-    // Process each task
-    tasks.forEach(task => {
-      if (!task.assignedTo || !task.assignedToName) {
-        return; // Skip tasks without assignee
-      }
-      
-      // Try to find supervisor by different identifiers
-      const supervisorId = task.assignedTo;
-      const supervisorName = task.assignedToName;
-      
-      // Find matching assignee for additional info
-      const matchedAssignee = assignees.find(assignee => 
-        assignee._id === supervisorId || 
-        assignee.name?.toLowerCase() === supervisorName.toLowerCase() ||
-        assignee.email?.toLowerCase() === supervisorId.toLowerCase()
-      );
-      
-      const assigneeKey = matchedAssignee?._id || supervisorId;
-      
-      if (!tasksByAssignee.has(assigneeKey)) {
-        // Create new supervisor entry
-        tasksByAssignee.set(assigneeKey, {
-          supervisorInfo: {
-            _id: assigneeKey,
-            name: supervisorName,
-            email: matchedAssignee?.email || supervisorId.includes('@') ? supervisorId : `${supervisorName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
-            phone: matchedAssignee?.phone || "Not provided",
-            department: matchedAssignee?.department || "Operations",
-            site: task.siteName || "",
-            role: "supervisor" as const,
-            employees: 0,
-            tasks: 0,
-            assignedProjects: [],
-            reportsTo: "",
-            isActive: true,
-            status: "active" as const,
-            joinDate: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            primarySite: task.siteName,
-            assignedSites: []
-          },
-          tasks: [],
-          sites: new Set<string>()
-        });
-      }
-      
-      const supervisorData = tasksByAssignee.get(assigneeKey)!;
-      supervisorData.tasks.push(task);
-      
-      // Add site to sites set
-      if (task.siteName) {
-        supervisorData.sites.add(task.siteName);
-      }
-    });
-    
-    // Convert map to array and enrich with task statistics
-    const supervisorsFromTasks: EnhancedSupervisor[] = Array.from(tasksByAssignee.values()).map(data => {
-      const tasks = data.tasks;
-      const sites = Array.from(data.sites);
-      
-      // Count task statuses
-      const pendingTasks = tasks.filter(t => t.status === 'pending').length;
-      const inProgressTasks = tasks.filter(t => t.status === 'in-progress').length;
-      const completedTasks = tasks.filter(t => t.status === 'completed').length;
-      
-      // Check for overdue tasks
-      const today = new Date();
-      const overdueTasks = tasks.filter(t => {
-        if (t.deadline && t.status !== 'completed') {
-          const deadline = new Date(t.deadline);
-          return deadline < today;
-        }
-        return false;
-      }).length;
-      
-      // Determine primary site (site with most tasks)
-      const siteTaskCount: Record<string, number> = {};
-      tasks.forEach(task => {
-        if (task.siteName) {
-          siteTaskCount[task.siteName] = (siteTaskCount[task.siteName] || 0) + 1;
-        }
-      });
-      
-      const primarySite = Object.entries(siteTaskCount)
-        .sort(([, a], [, b]) => b - a)[0]?.[0] || sites[0] || "Not assigned";
-      
-      return {
-        ...data.supervisorInfo as EnhancedSupervisor,
-        tasks: tasks.length,
-        pendingTasks,
-        inProgressTasks,
-        completedTasks,
-        overdueTasks,
-        assignedTasks: tasks,
-        assignedSites: sites,
-        primarySite,
-        site: primarySite
-      };
-    });
-    
-    return supervisorsFromTasks;
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* COMBINE SUPERVISOR DATA FROM MULTIPLE SOURCES */
-  /* ------------------------------------------------------------------ */
-
-  const combineSupervisorData = async () => {
-    try {
-      // Fetch all data in parallel
-      const [allTasks, assigneeList] = await Promise.allSettled([
-        fetchAllTasks(),
-        fetchAssignees(),
-      ]);
-      
-      const tasks = allTasks.status === 'fulfilled' ? allTasks.value : [];
-      const assignees = assigneeList.status === 'fulfilled' ? assigneeList.value : [];
-      
-      // Extract supervisors from tasks (primary source)
-      const taskSupervisors = extractSupervisorsFromTasks(tasks, assignees);
-      
-      // Convert assignees to supervisor format
-      const assigneeSupervisors: EnhancedSupervisor[] = assignees
-        .filter(assignee => assignee.role === "supervisor")
-        .map(assignee => {
-          // Find tasks for this assignee
-          const assigneeTasks = tasks.filter(task => 
-            task.assignedTo === assignee._id || 
-            task.assignedToName?.toLowerCase() === assignee.name?.toLowerCase()
-          );
-          
-          // Calculate task statistics
-          const pendingTasks = assigneeTasks.filter(t => t.status === 'pending').length;
-          const inProgressTasks = assigneeTasks.filter(t => t.status === 'in-progress').length;
-          const completedTasks = assigneeTasks.filter(t => t.status === 'completed').length;
-          
-          // Get unique sites from tasks
-          const assignedSites = [...new Set(assigneeTasks.map(t => t.siteName).filter(Boolean))];
-          
-          return {
-            _id: assignee._id || `assignee-${assignee.email}`,
-            name: assignee.name || "Unknown Supervisor",
-            email: assignee.email,
-            phone: assignee.phone || "Not provided",
-            department: assignee.department || "Operations",
-            site: assignedSites[0] || "",
-            role: "supervisor" as const,
-            employees: 0,
-            tasks: assigneeTasks.length,
-            assignedProjects: [],
-            reportsTo: "",
-            isActive: true,
-            status: "active" as const,
-            joinDate: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            pendingTasks,
-            inProgressTasks,
-            completedTasks,
-            overdueTasks: 0,
-            assignedTasks: assigneeTasks,
-            assignedSites,
-            primarySite: assignedSites[0] || "Not assigned"
-          };
-        });
-      
-      // Merge all supervisor sources
-      const allSupervisors = [...taskSupervisors, ...assigneeSupervisors];
-      
-      // Remove duplicates by email (primary key)
-      const uniqueSupervisors = Array.from(
-        new Map(allSupervisors.map(s => [s.email.toLowerCase(), s])).values()
-      );
-      
-      // Filter by site if needed
-      let filteredSupervisors = uniqueSupervisors;
-      
-      if (selectedSiteId !== "all" && selectedSiteName) {
-        filteredSupervisors = uniqueSupervisors.filter(supervisor => {
-          // Check if supervisor is assigned to this site via tasks
-          const hasSiteTasks = supervisor.assignedSites?.includes(selectedSiteName) || false;
-          const siteMatches = supervisor.site === selectedSiteName;
-          const primarySiteMatches = supervisor.primarySite === selectedSiteName;
-          
-          return hasSiteTasks || siteMatches || primarySiteMatches;
-        });
-      }
-      
-      // Exclude current user if they are a supervisor
-      if (role === "supervisor" && currentUser) {
-        filteredSupervisors = filteredSupervisors.filter(s => 
-          s.email.toLowerCase() !== currentUser.email?.toLowerCase()
-        );
-      }
-      
-      setSupervisors(filteredSupervisors);
-      
-    } catch (error: any) {
-      console.error("Error combining supervisor data:", error);
-      toast.error("Could not load supervisors");
-      setSupervisors([]);
-    }
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* FETCH ALL DATA */
-  /* ------------------------------------------------------------------ */
-
-  const fetchAllData = async () => {
+  const fetchData = async () => {
     try {
       setLoading(true);
-      await combineSupervisorData();
-      await fetchManagedSupervisors();
+      
+      const managerId = authUser?._id || authUser?.id;
+      if (!managerId) {
+        throw new Error("Manager ID not found");
+      }
+
+      // Fetch all sites and tasks
+      let allSites = [];
+      let allTasks = [];
+      
+      try {
+        allSites = await siteService.getAllSites();
+        console.log('All sites with counts:', allSites.map((s: any) => ({
+          name: s.name,
+          supervisorCount: s.supervisorCount,
+          staffDeployment: s.staffDeployment
+        })));
+      } catch (error) {
+        console.error('Error fetching sites:', error);
+        allSites = [];
+      }
+      
+      try {
+        allTasks = await taskService.getAllTasks();
+      } catch (error) {
+        console.error('Error fetching tasks:', error);
+        allTasks = [];
+      }
+
+      // Fetch all supervisors
+      const supervisors = await fetchAllSupervisors();
+      setAllSupervisors(supervisors);
+
+      // Get sites where manager is assigned
+      const managerSites = allSites.filter((site: any) => {
+        if (!site || !site._id) return false;
+        
+        const siteTasks = allTasks.filter((task: any) => task && task.siteId === site._id);
+        
+        const isManagerAssigned = siteTasks.some((task: any) => 
+          task && task.assignedUsers && task.assignedUsers.some((user: any) => 
+            user && user.userId === managerId && user.role === 'manager'
+          )
+        );
+
+        return isManagerAssigned;
+      });
+
+      // Process each site
+      const sitesWithSupervisors = await Promise.all(
+        managerSites.map(site => processSiteWithSupervisors(site, allTasks, supervisors))
+      );
+
+      setSites(sitesWithSupervisors);
+
     } catch (error: any) {
-      console.error("Error loading data:", error);
-      toast.error("Could not load data");
+      console.error("Error fetching data:", error);
+      toast.error(error.message || "Failed to load data");
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
-  /* ------------------------------------------------------------------ */
-  /* INITIAL DATA LOAD */
-  /* ------------------------------------------------------------------ */
+  const fetchAddedSupervisors = async () => {
+    try {
+      const managerId = authUser?._id || authUser?.id;
+      if (!managerId) return;
 
-  useEffect(() => {
-    const initializeData = async () => {
-      if (!currentUser) {
+      // Get all supervisors and filter by reportsTo
+      const allSupers = await supervisorService.getAllSupervisors();
+      
+      // Filter supervisors where reportsTo === managerId
+      const mySupervisors = allSupers.filter(sup => sup.reportsTo === managerId);
+      
+      // Enhance with task counts
+      const enhancedSupervisors = await Promise.all(
+        mySupervisors.map(async (sup: ImportedSupervisor) => {
+          try {
+            const tasks = await taskService.getTasksByAssignee(sup._id);
+            const currentTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled').length;
+            const completedTasks = tasks.filter(t => t.status === 'completed').length;
+            
+            return {
+              ...sup,
+              role: 'supervisor' as const,
+              currentTasks,
+              completedTasks,
+              status: sup.isActive ? 'active' as const : 'inactive' as const
+            };
+          } catch (error) {
+            return {
+              ...sup,
+              role: 'supervisor' as const,
+              currentTasks: 0,
+              completedTasks: 0,
+              status: sup.isActive ? 'active' as const : 'inactive' as const
+            };
+          }
+        })
+      );
+      
+      setAddedSupervisors(enhancedSupervisors);
+    } catch (error) {
+      console.error("Error fetching added supervisors:", error);
+      toast.error("Failed to load added supervisors");
+    }
+  };
+
+  const fetchAllSupervisors = async (): Promise<Supervisor[]> => {
+    try {
+      // Use the supervisor service instead of direct fetch
+      const supervisors = await supervisorService.getAllSupervisors();
+      return supervisors.map((s: ImportedSupervisor) => ({
+        _id: s._id,
+        name: s.name,
+        email: s.email,
+        phone: s.phone || '',
+        role: 'supervisor' as const,
+        status: s.isActive ? 'active' as const : 'inactive' as const,
+        department: s.department,
+        joinDate: s.joinDate,
+        reportsTo: s.reportsTo,
+        isActive: s.isActive
+      }));
+    } catch (error) {
+      console.error("Error fetching supervisors:", error);
+      return [];
+    }
+  };
+
+  const processSiteWithSupervisors = async (
+    site: any, 
+    allTasks: any[], 
+    allSupervisors: Supervisor[]
+  ): Promise<SiteWithSupervisors> => {
+    const safeSite = site || {};
+    const siteTasks = (allTasks || []).filter(task => task && task.siteId === safeSite._id);
+    
+    // Get assigned supervisors
+    const assignedSupervisorIds = new Set<string>();
+    const assignedSupervisors: Supervisor[] = [];
+    
+    siteTasks.forEach(task => {
+      if (task && task.assignedUsers) {
+        task.assignedUsers.forEach((user: any) => {
+          if (user && user.role === 'supervisor' && user.userId && !assignedSupervisorIds.has(user.userId)) {
+            assignedSupervisorIds.add(user.userId);
+            
+            const supervisor = allSupervisors.find(s => s && s._id === user.userId) || {
+              _id: user.userId,
+              name: user.name || 'Unknown',
+              email: user.email || '',
+              phone: user.phone || '',
+              role: 'supervisor' as const,
+              status: 'active'
+            };
+            
+            const supervisorTasks = siteTasks.filter(t => 
+              t && t.assignedUsers && t.assignedUsers.some((u: any) => u && u.userId === user.userId)
+            );
+            
+            supervisor.currentTasks = supervisorTasks.filter(t => 
+              t && t.status !== 'completed' && t.status !== 'cancelled'
+            ).length;
+            
+            supervisor.completedTasks = supervisorTasks.filter(t => 
+              t && t.status === 'completed'
+            ).length;
+            
+            assignedSupervisors.push(supervisor);
+          }
+        });
+      }
+    });
+    
+    const availableSupervisors = (allSupervisors || []).filter(s => 
+      s && s._id && !assignedSupervisorIds.has(s._id)
+    );
+    
+    // Calculate required supervisors from site data
+    const requiredSupervisors = calculateSupervisorCount(safeSite);
+    
+    let staffingStatus: SiteWithSupervisors['staffingStatus'] = 'under-staffed';
+    if (assignedSupervisors.length >= requiredSupervisors) {
+      staffingStatus = assignedSupervisors.length > requiredSupervisors ? 'over-staffed' : 'fully-staffed';
+    } else if (assignedSupervisors.length > 0) {
+      staffingStatus = 'partially-staffed';
+    }
+    
+    return {
+      _id: safeSite._id || '',
+      name: safeSite.name || 'Unnamed Site',
+      clientName: safeSite.clientName || 'Unknown Client',
+      location: safeSite.location || 'Unknown Location',
+      status: safeSite.status || 'active',
+      requiredSupervisors,
+      assignedSupervisors,
+      availableSupervisors,
+      totalSupervisors: assignedSupervisors.length,
+      pendingTasks: siteTasks.filter(t => t && t.status === 'pending').length,
+      inProgressTasks: siteTasks.filter(t => t && t.status === 'in-progress').length,
+      completedTasks: siteTasks.filter(t => t && t.status === 'completed').length,
+      staffingStatus
+    };
+  };
+
+  const handleAddSupervisor = async () => {
+    try {
+      const managerId = authUser?._id || authUser?.id;
+      if (!managerId) {
+        toast.error("Manager ID not found");
         return;
       }
-      
-      // Check permissions
-      const canCreate = ["superadmin", "admin", "manager"].includes(role);
-      setCanCreateSupervisor(canCreate);
-      
-      // Fetch initial data
-      await fetchSites();
-    };
-    
-    initializeData();
-  }, [currentUser, role]);
 
-  /* ------------------------------------------------------------------ */
-  /* FETCH DATA WHEN SITE CHANGES */
-  /* ------------------------------------------------------------------ */
+      const supervisorData: CreateSupervisorData = {
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        password: formData.password,
+        department: formData.department,
+        reportsTo: managerId
+      };
 
-  useEffect(() => {
-    if (selectedSiteId && currentUser) {
-      fetchAllData();
+      await supervisorService.createSupervisor(supervisorData);
+      
+      toast.success("Supervisor added successfully!");
+      setShowAddSupervisorDialog(false);
+      resetForm();
+      fetchAddedSupervisors();
+      fetchData(); // Refresh site supervisors too
+    } catch (error: any) {
+      toast.error(error.message || "Failed to add supervisor");
     }
-  }, [selectedSiteId, selectedSiteName, currentUser]);
+  };
 
-  /* ------------------------------------------------------------------ */
-  /* HANDLERS */
-  /* ------------------------------------------------------------------ */
+  const handleUpdateSupervisor = async () => {
+    if (!editingSupervisor) return;
 
-  const openDialog = (supervisor?: Supervisor) => {
-    if (supervisor) {
-      setEditingSupervisor(supervisor);
-      form.reset({
-        name: supervisor.name,
-        email: supervisor.email,
-        phone: supervisor.phone,
-        department: supervisor.department,
-        site: supervisor.site || selectedSiteName,
-      });
-    } else {
+    try {
+      const updateData = {
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        department: formData.department,
+        isActive: formData.status === 'active'
+      };
+
+      await supervisorService.updateSupervisor(editingSupervisor._id, updateData);
+      
+      toast.success("Supervisor updated successfully!");
+      setShowAddSupervisorDialog(false);
       setEditingSupervisor(null);
-      form.reset({
-        name: "",
-        email: "",
-        phone: "",
-        password: "",
-        department: "Operations",
-        site: selectedSiteName || "",
-      });
+      resetForm();
+      fetchAddedSupervisors();
+      fetchData(); // Refresh site supervisors too
+    } catch (error: any) {
+      toast.error(error.message || "Failed to update supervisor");
     }
-    setDialogOpen(true);
   };
 
-  const handleSiteChange = (siteId: string) => {
-    if (siteId === "all") {
-      setSelectedSiteId("all");
-      setSelectedSiteName("All Sites");
-    } else {
-      const selected = sites.find(s => s._id === siteId);
-      if (selected) {
-        setSelectedSiteId(selected._id);
-        setSelectedSiteName(selected.name);
-      } else {
-        console.error("Selected site not found:", siteId);
-        toast.error("Selected site not found");
-      }
+  const handleDeleteSupervisor = async (supervisorId: string) => {
+    if (!confirm("Are you sure you want to delete this supervisor?")) return;
+
+    try {
+      await supervisorService.deleteSupervisor(supervisorId);
+      toast.success("Supervisor deleted successfully!");
+      fetchAddedSupervisors();
+      fetchData(); // Refresh site supervisors too
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete supervisor");
     }
   };
+
+  const handleToggleStatus = async (supervisor: Supervisor) => {
+    try {
+      const updatedSupervisor = await supervisorService.toggleSupervisorStatus(supervisor._id);
+      toast.success(`Supervisor ${updatedSupervisor.isActive ? 'activated' : 'deactivated'} successfully!`);
+      fetchAddedSupervisors();
+      fetchData(); // Refresh site supervisors too
+    } catch (error: any) {
+      toast.error(error.message || "Failed to toggle status");
+    }
+  };
+
+  const openEditDialog = (supervisor: Supervisor) => {
+    setEditingSupervisor(supervisor);
+    setFormData({
+      name: supervisor.name,
+      email: supervisor.email,
+      phone: supervisor.phone || '',
+      password: '',
+      department: supervisor.department || '',
+      status: supervisor.status
+    });
+    setShowAddSupervisorDialog(true);
+  };
+
+  const resetForm = () => {
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      password: '',
+      department: '',
+      status: 'active'
+    });
+    setEditingSupervisor(null);
+  };
+
+  const getStaffingStatusBadge = (status: SiteWithSupervisors['staffingStatus']) => {
+    switch (status) {
+      case 'fully-staffed':
+        return <Badge className="bg-green-100 text-green-800 border-green-200">✓ Full</Badge>;
+      case 'partially-staffed':
+        return <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200">⚠ Partial</Badge>;
+      case 'under-staffed':
+        return <Badge variant="destructive">✗ Under</Badge>;
+      case 'over-staffed':
+        return <Badge className="bg-blue-100 text-blue-800 border-blue-200">⟳ Over</Badge>;
+      default:
+        return <Badge variant="outline">?</Badge>;
+    }
+  };
+
+  const getInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map(word => word[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  const filteredSites = sites.filter(site => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      (site.name || '').toLowerCase().includes(query) ||
+      (site.clientName || '').toLowerCase().includes(query) ||
+      (site.location || '').toLowerCase().includes(query)
+    );
+  });
+
+  const filteredAddedSupervisors = addedSupervisors.filter(sup => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      (sup.name || '').toLowerCase().includes(query) ||
+      (sup.email || '').toLowerCase().includes(query) ||
+      (sup.department || '').toLowerCase().includes(query)
+    );
+  });
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchSites();
-    await fetchAllData();
-    toast.success("Data refreshed");
+    await fetchData();
+    await fetchAddedSupervisors();
+    setRefreshing(false);
   };
 
-  const onSubmit = async (data: CreateFormData | UpdateFormData) => {
-    try {
-      // Ensure site is set
-      const siteValue = data.site || selectedSiteName;
-      
-      if (!siteValue) {
-        toast.error("Please select a site");
-        return;
-      }
-      
-      if (editingSupervisor) {
-        const payload: UpdateSupervisorData = {
-          name: data.name,
-          email: data.email,
-          phone: data.phone,
-          department: data.department,
-          site: siteValue,
-          reportsTo: role === "manager" ? currentUser?.email : undefined,
-        };
-
-        await supervisorService.updateSupervisor(
-          editingSupervisor._id,
-          payload
-        );
-        toast.success("Supervisor updated successfully");
-      } else {
-        const payload: CreateSupervisorData = {
-          name: data.name,
-          email: data.email,
-          phone: data.phone,
-          password: (data as CreateFormData).password,
-          department: data.department,
-          site: siteValue,
-          reportsTo: role === "manager" ? currentUser?.email : undefined,
-        };
-
-        await supervisorService.createSupervisor(payload);
-        toast.success("Supervisor created successfully");
-      }
-
-      setDialogOpen(false);
-      // Refresh data
-      await handleRefresh();
-    } catch (error: any) {
-      console.error("Failed to save supervisor:", error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.message ||
-                          "Failed to save supervisor";
-      toast.error(errorMessage);
-    }
-  };
-
-  /* ------------------------------------------------------------------ */
-  /* HELPER FUNCTIONS */
-  /* ------------------------------------------------------------------ */
-
-  const getTaskCountBadge = (count: number, type: 'pending' | 'inProgress' | 'completed' | 'overdue') => {
-    const colors = {
-      pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-      inProgress: 'bg-blue-50 text-blue-700 border-blue-200',
-      completed: 'bg-green-50 text-green-700 border-green-200',
-      overdue: 'bg-red-50 text-red-700 border-red-200'
-    };
-    
+  if (!isAuthenticated && !loading) {
     return (
-      <Badge variant="outline" className={`text-xs ${colors[type]}`}>
-        {type === 'pending' && <Clock className="h-3 w-3 mr-1" />}
-        {type === 'inProgress' && <Clock className="h-3 w-3 mr-1" />}
-        {type === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
-        {type === 'overdue' && <AlertCircle className="h-3 w-3 mr-1" />}
-        {count}
-      </Badge>
+      <div className="min-h-screen bg-background">
+        <DashboardHeader title="Site Supervisors" subtitle="Manage supervisors across your sites" />
+        <div className="p-6 max-w-4xl mx-auto">
+          <Card>
+            <CardContent className="p-8 text-center">
+              <AlertCircle className="h-16 w-16 mx-auto text-yellow-500 mb-4" />
+              <h2 className="text-xl font-bold mb-2">Authentication Required</h2>
+              <p className="text-muted-foreground mb-4">Please log in to view site supervisors.</p>
+              <Button onClick={() => window.location.href = '/login'}>Go to Login</Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     );
-  };
+  }
 
-  /* ------------------------------------------------------------------ */
-  /* FILTER SUPERVISORS BASED ON SEARCH */
-  /* ------------------------------------------------------------------ */
-
-  const filteredSupervisors = supervisors.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (s.department && s.department.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (s.site && s.site.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (s.primarySite && s.primarySite.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
-
-  const filteredManagedSupervisors = managedSupervisors.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQueryManaged.toLowerCase()) ||
-      s.email.toLowerCase().includes(searchQueryManaged.toLowerCase()) ||
-      (s.department && s.department.toLowerCase().includes(searchQueryManaged.toLowerCase())) ||
-      (s.site && s.site.toLowerCase().includes(searchQueryManaged.toLowerCase()))
-  );
-
-  /* ------------------------------------------------------------------ */
-  /* RENDER */
-  /* ------------------------------------------------------------------ */
-
-  // If no current user, show loading
-  if (!currentUser) {
+  if (loading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      <div className="min-h-screen bg-background">
+        <DashboardHeader title="Site Supervisors" subtitle="Loading..." />
+        <div className="p-6 max-w-4xl mx-auto">
+          <div className="flex items-center justify-center h-64">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="ml-3 text-muted-foreground">Loading data...</p>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-background">
-      <DashboardHeader
-        title="Supervisors"
-        subtitle={
-          role === "supervisor" 
-            ? `Supervisors at ${selectedSiteName || "your site"}` 
-            : role === "manager" 
-              ? `Supervisors at ${selectedSiteName || "your site"}`
-              : selectedSiteId === "all"
-                ? "All Supervisors"
-                : `Supervisors at ${selectedSiteName || "Select a site"}`
-        }
-        onMenuClick={onMenuClick}
+      <DashboardHeader 
+        title="Supervisor Management" 
+        subtitle="Manage site supervisors and view your added supervisors" 
       />
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="p-6 space-y-6"
-      >
-        <Card>
-          <CardHeader className="flex flex-col gap-4">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                <CardTitle>Supervisors Management</CardTitle>
-                <Badge variant="outline" className="ml-2">
-                  {filteredSupervisors.length + filteredManagedSupervisors.length} total
-                </Badge>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleRefresh}
-                  disabled={refreshing || loading || loadingTasks}
-                >
-                  <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-                </Button>
-                
-                {canCreateSupervisor && selectedSiteId && selectedSiteId !== "all" && (
-                  <Button onClick={() => openDialog()}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Supervisor
-                  </Button>
-                )}
-              </div>
-            </div>
-            
-            {/* Filters */}
-            <div className="flex flex-col sm:flex-row gap-4">
-              {/* Site Selection */}
-              <div className="flex items-center gap-2">
-                <Building className="h-4 w-4" />
-                <span className="text-sm font-medium whitespace-nowrap">Site:</span>
-                <Select
-                  value={selectedSiteId}
-                  onValueChange={handleSiteChange}
-                  disabled={loading || loadingTasks}
-                >
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder={sites.length === 0 ? "Loading sites..." : "Select site"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(role === "admin" || role === "superadmin") && (
-                      <SelectItem value="all">All Sites</SelectItem>
-                    )}
-                    {sites.map((site) => (
-                      <SelectItem key={site._id} value={site._id}>
-                        {site.name}
-                        {site.location && ` - ${site.location}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedSiteName && (
-                  <Badge variant="outline" className="ml-2">
-                    <Briefcase className="h-3 w-3 mr-1" />
-                    {selectedSiteName}
-                  </Badge>
-                )}
-              </div>
-            </div>
-          </CardHeader>
+      <div className="p-6 max-w-7xl mx-auto space-y-4">
+        {/* Search and Refresh Bar */}
+        <div className="flex gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search sites or supervisors..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+          <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <Button onClick={() => {
+            resetForm();
+            setShowAddSupervisorDialog(true);
+          }}>
+            <UserPlus className="h-4 w-4 mr-2" />
+            Add Supervisor
+          </Button>
+        </div>
 
-          <CardContent>
-            {loading || loadingTasks ? (
-              <div className="text-center py-10">
-                <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
-                <p className="mt-2 text-muted-foreground">
-                  {loadingTasks ? "Analyzing tasks to find supervisors..." : "Loading supervisors..."}
-                </p>
-              </div>
-            ) : !selectedSiteId ? (
-              <div className="text-center py-10">
-                <Building className="h-12 w-12 mx-auto text-muted-foreground" />
-                <h3 className="mt-4 text-lg font-semibold">No Site Selected</h3>
-                <p className="text-muted-foreground mt-1">
-                  Please select a site to view supervisors
-                </p>
-              </div>
-            ) : (
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-                <TabsList className="grid w-full md:w-auto grid-cols-2">
-                  <TabsTrigger value="task-supervisors" className="flex items-center gap-2">
-                    <Database className="h-4 w-4" />
-                    From Tasks & Assignees
-                    <Badge variant="secondary" className="ml-2">
-                      {filteredSupervisors.length}
-                    </Badge>
-                  </TabsTrigger>
-                  <TabsTrigger value="managed-supervisors" className="flex items-center gap-2">
-                    <UserPlus className="h-4 w-4" />
-                    Manager-Added Supervisors
-                    <Badge variant="secondary" className="ml-2">
-                      {filteredManagedSupervisors.length}
-                    </Badge>
-                  </TabsTrigger>
-                </TabsList>
-                
-                {/* Tab 1: Supervisors from Tasks & Assignees */}
-                <TabsContent value="task-supervisors" className="space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-blue-500" />
-                      <span className="text-sm text-muted-foreground">
-                        Supervisors discovered from task assignments and assignee lists
-                      </span>
-                    </div>
-                    <div className="relative w-full sm:w-auto">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search supervisors from tasks..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-10 w-full sm:w-[300px]"
-                      />
-                    </div>
-                  </div>
-                  
-                  {filteredSupervisors.length === 0 ? (
-                    <div className="text-center py-10">
-                      <Database className="h-12 w-12 mx-auto text-muted-foreground" />
-                      <h3 className="mt-4 text-lg font-semibold">No Supervisors Found</h3>
-                      <p className="text-muted-foreground mt-1">
-                        {searchQuery
-                          ? "No supervisors match your search criteria"
-                          : selectedSiteId === "all"
-                          ? "No supervisors found in any site from tasks"
-                          : `No task supervisors found at ${selectedSiteName}`
-                        }
-                      </p>
-                      
-                      <div className="mt-6 bg-blue-50 p-4 rounded-lg border border-blue-200 max-w-md mx-auto">
-                        <h4 className="font-medium text-blue-800 mb-2">Why no supervisors?</h4>
-                        <ul className="text-sm text-blue-700 text-left space-y-1">
-                          <li>• No tasks have been assigned to supervisors at this site</li>
-                          <li>• Tasks might not have the <code>assignedTo</code> field populated</li>
-                          <li>• Check if supervisors exist in the Assignees list</li>
-                          <li>• Verify that tasks have correct <code>assignedToName</code> values</li>
-                        </ul>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-md border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Supervisor</TableHead>
-                            <TableHead>Contact</TableHead>
-                            <TableHead>Task Statistics</TableHead>
-                            <TableHead>Site(s)</TableHead>
-                            <TableHead>Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredSupervisors.map((supervisor) => (
-                            <TableRow key={supervisor._id}>
-                              <TableCell className="font-medium">
-                                <div className="flex flex-col">
-                                  <div className="flex items-center">
-                                    <Shield className="h-4 w-4 mr-2 text-blue-500" />
-                                    <span>{supervisor.name}</span>
-                                  </div>
-                                  <div className="text-xs text-muted-foreground mt-1">
-                                    ID: {supervisor._id?.slice(-8) || 'From Tasks'}
-                                    {supervisor._id?.includes('assignee') && ' (From Assignees)'}
-                                    {supervisor._id?.includes('task') && ' (From Tasks)'}
-                                  </div>
-                                  <div className="mt-2">
-                                    <Badge variant="outline" className="text-xs">
-                                      <FileText className="h-3 w-3 mr-1" />
-                                      {supervisor.tasks || 0} total tasks
-                                    </Badge>
-                                  </div>
+        {/* Tabs - Fixed Structure */}
+        <Card>
+          <CardContent className="p-6">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+              <TabsList className="grid w-full grid-cols-2 mb-6">
+                <TabsTrigger value="site-supervisors">
+                  <Building className="h-4 w-4 mr-2" />
+                  Site Supervisors ({sites.length} sites)
+                </TabsTrigger>
+                <TabsTrigger value="added-supervisors">
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  My Supervisors ({addedSupervisors.length})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="site-supervisors" className="m-0">
+                {/* Sites Table */}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[250px]">Site & Client</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead className="text-center">Required</TableHead>
+                      <TableHead className="text-center">Assigned</TableHead>
+                      <TableHead className="text-center">Available</TableHead>
+                      <TableHead className="text-center">Tasks</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredSites.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                          No sites found
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredSites.map((site) => (
+                        <TableRow key={site._id} className="cursor-pointer hover:bg-muted/50" onClick={() => {
+                          setSelectedSite(site);
+                          setShowSiteDetails(true);
+                        }}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Building className="h-4 w-4 text-primary" />
+                              <div>
+                                <div className="font-medium">{site.name}</div>
+                                <div className="text-xs text-muted-foreground">{site.clientName}</div>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1 text-sm">
+                              <MapPin className="h-3 w-3 text-muted-foreground" />
+                              {site.location}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {getStaffingStatusBadge(site.staffingStatus)}
+                          </TableCell>
+                          <TableCell className="text-center font-medium">
+                            {site.requiredSupervisors}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant={site.assignedSupervisors.length > 0 ? "default" : "outline"}>
+                              {site.assignedSupervisors.length}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="bg-blue-50">
+                              {site.availableSupervisors.length}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <div className="flex justify-center gap-1">
+                              <Badge variant="outline" className="bg-yellow-50 text-xs px-1">
+                                P:{site.pendingTasks}
+                              </Badge>
+                              <Badge variant="outline" className="bg-blue-50 text-xs px-1">
+                                IP:{site.inProgressTasks}
+                              </Badge>
+                              <Badge variant="outline" className="bg-green-50 text-xs px-1">
+                                C:{site.completedTasks}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button variant="ghost" size="sm" onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSite(site);
+                              setShowSiteDetails(true);
+                            }}>
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+
+              <TabsContent value="added-supervisors" className="m-0">
+                {/* Added Supervisors Table */}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Supervisor</TableHead>
+                      <TableHead>Contact</TableHead>
+                      <TableHead>Department</TableHead>
+                      <TableHead className="text-center">Current Tasks</TableHead>
+                      <TableHead className="text-center">Completed</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAddedSupervisors.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                          No supervisors added yet. Click "Add Supervisor" to get started.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      filteredAddedSupervisors.map((supervisor) => (
+                        <TableRow key={supervisor._id}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <Avatar>
+                                <AvatarFallback className="bg-amber-100 text-amber-700">
+                                  {getInitials(supervisor.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <div className="font-medium">{supervisor.name}</div>
+                                <div className="text-xs text-muted-foreground">ID: {supervisor._id.slice(-6)}</div>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-sm">
+                                <Mail className="h-3 w-3 text-muted-foreground" />
+                                {supervisor.email}
+                              </div>
+                              {supervisor.phone && (
+                                <div className="flex items-center gap-2 text-sm">
+                                  <Phone className="h-3 w-3 text-muted-foreground" />
+                                  {supervisor.phone}
                                 </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-col space-y-1">
-                                  <div className="flex items-center text-sm">
-                                    <Mail className="h-3 w-3 mr-2 flex-shrink-0" />
-                                    <span className="truncate">{supervisor.email}</span>
-                                  </div>
-                                  <div className="flex items-center text-sm text-muted-foreground">
-                                    <Phone className="h-3 w-3 mr-2 flex-shrink-0" />
-                                    <span>{supervisor.phone || "Not provided"}</span>
-                                  </div>
-                                  <div className="text-xs mt-2">
-                                    <Badge variant="outline">
-                                      {supervisor.department || "Operations"}
-                                    </Badge>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-col space-y-2">
-                                  <div className="flex flex-wrap gap-1">
-                                    {supervisor.pendingTasks && supervisor.pendingTasks > 0 && 
-                                      getTaskCountBadge(supervisor.pendingTasks, 'pending')}
-                                    {supervisor.inProgressTasks && supervisor.inProgressTasks > 0 && 
-                                      getTaskCountBadge(supervisor.inProgressTasks, 'inProgress')}
-                                    {supervisor.completedTasks && supervisor.completedTasks > 0 && 
-                                      getTaskCountBadge(supervisor.completedTasks, 'completed')}
-                                    {supervisor.overdueTasks && supervisor.overdueTasks > 0 && 
-                                      getTaskCountBadge(supervisor.overdueTasks, 'overdue')}
-                                  </div>
-                                  {supervisor.assignedTasks && supervisor.assignedTasks.length > 0 && (
-                                    <div className="text-xs text-muted-foreground">
-                                      Latest: {supervisor.assignedTasks[0]?.title?.substring(0, 30)}...
-                                    </div>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="space-y-2">
-                                  <div className="flex items-center">
-                                    <MapPin className="h-3 w-3 mr-2 flex-shrink-0" />
-                                    <span className="font-medium">{supervisor.primarySite || "Not assigned"}</span>
-                                  </div>
-                                  {supervisor.assignedSites && supervisor.assignedSites.length > 1 && (
-                                    <div className="text-xs text-muted-foreground">
-                                      Also at: {supervisor.assignedSites.slice(1).join(', ')}
-                                    </div>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="space-y-1">
-                                  <Badge
-                                    variant={supervisor.isActive ? "default" : "secondary"}
-                                    className={
-                                      supervisor.isActive
-                                        ? "bg-green-100 text-green-800 hover:bg-green-100"
-                                        : "bg-gray-100 text-gray-800 hover:bg-gray-100"
-                                    }
-                                  >
-                                    {supervisor.isActive ? "Active" : "Inactive"}
-                                  </Badge>
-                                  {supervisor.assignedTasks && supervisor.assignedTasks.length > 0 && (
-                                    <div className="text-xs text-muted-foreground">
-                                      Last active: {new Date(supervisor.updatedAt).toLocaleDateString()}
-                                    </div>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </TabsContent>
-                
-                {/* Tab 2: Manager-Added Supervisors */}
-                <TabsContent value="managed-supervisors" className="space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                    <div className="flex items-center gap-2">
-                      <UserPlus className="h-4 w-4 text-green-500" />
-                      <span className="text-sm text-muted-foreground">
-                        Supervisors created by managers through the supervisor management system
-                      </span>
-                    </div>
-                    <div className="relative w-full sm:w-auto">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search managed supervisors..."
-                        value={searchQueryManaged}
-                        onChange={(e) => setSearchQueryManaged(e.target.value)}
-                        className="pl-10 w-full sm:w-[300px]"
-                      />
-                    </div>
-                  </div>
-                  
-                  {loadingManaged ? (
-                    <div className="text-center py-10">
-                      <Loader2 className="h-8 w-8 animate-spin mx-auto text-primary" />
-                      <p className="mt-2 text-muted-foreground">Loading managed supervisors...</p>
-                    </div>
-                  ) : filteredManagedSupervisors.length === 0 ? (
-                    <div className="text-center py-10">
-                      <UserPlus className="h-12 w-12 mx-auto text-muted-foreground" />
-                      <h3 className="mt-4 text-lg font-semibold">No Managed Supervisors</h3>
-                      <p className="text-muted-foreground mt-1">
-                        {searchQueryManaged
-                          ? "No managed supervisors match your search"
-                          : selectedSiteId === "all"
-                          ? "No supervisors have been created by managers"
-                          : `No supervisors created by managers at ${selectedSiteName}`
-                        }
-                      </p>
-                      
-                      {canCreateSupervisor && !searchQueryManaged && selectedSiteId !== "all" && (
-                        <Button className="mt-6" onClick={() => openDialog()}>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Create Your First Supervisor
-                        </Button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="rounded-md border">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Supervisor</TableHead>
-                            <TableHead>Contact</TableHead>
-                            <TableHead>Department & Site</TableHead>
-                            <TableHead>Employees & Tasks</TableHead>
-                            <TableHead>Reports To</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredManagedSupervisors.map((supervisor) => (
-                            <TableRow key={supervisor._id}>
-                              <TableCell className="font-medium">
-                                <div className="flex flex-col">
-                                  <div className="flex items-center">
-                                    <UserPlus className="h-4 w-4 mr-2 text-green-500" />
-                                    <span>{supervisor.name}</span>
-                                  </div>
-                                  <div className="text-xs text-muted-foreground mt-1">
-                                    ID: {supervisor._id?.slice(-8)}
-                                  </div>
-                                  <div className="mt-2">
-                                    <Badge variant="outline" className="text-xs">
-                                      <Calendar className="h-3 w-3 mr-1" />
-                                      Joined {new Date(supervisor.joinDate).toLocaleDateString()}
-                                    </Badge>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-col space-y-1">
-                                  <div className="flex items-center text-sm">
-                                    <Mail className="h-3 w-3 mr-2 flex-shrink-0" />
-                                    <span className="truncate">{supervisor.email}</span>
-                                  </div>
-                                  <div className="flex items-center text-sm text-muted-foreground">
-                                    <Phone className="h-3 w-3 mr-2 flex-shrink-0" />
-                                    <span>{supervisor.phone}</span>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="space-y-2">
-                                  <Badge variant="outline">
-                                    {supervisor.department}
-                                  </Badge>
-                                  <div className="flex items-center text-sm">
-                                    <Building className="h-3 w-3 mr-2" />
-                                    <span>{supervisor.site}</span>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-col space-y-2">
-                                  <div className="flex items-center gap-2">
-                                    <Users className="h-3 w-3" />
-                                    <span className="text-sm">{supervisor.employees} employees</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <FileText className="h-3 w-3" />
-                                    <span className="text-sm">{supervisor.tasks} tasks</span>
-                                  </div>
-                                  {supervisor.assignedProjects && supervisor.assignedProjects.length > 0 && (
-                                    <div className="text-xs text-muted-foreground">
-                                      Projects: {supervisor.assignedProjects.length}
-                                    </div>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="text-sm">
-                                  {supervisor.reportsTo ? (
-                                    <div className="flex items-center">
-                                      <Shield className="h-3 w-3 mr-2" />
-                                      {supervisor.reportsTo === currentUser?.email ? (
-                                        <Badge variant="secondary">You</Badge>
-                                      ) : (
-                                        supervisor.reportsTo
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="text-muted-foreground">Not assigned</span>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant={supervisor.isActive ? "default" : "secondary"}
-                                  className={
-                                    supervisor.isActive
-                                      ? "bg-green-100 text-green-800 hover:bg-green-100"
-                                      : "bg-gray-100 text-gray-800 hover:bg-gray-100"
-                                  }
-                                >
-                                  {supervisor.isActive ? "Active" : "Inactive"}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-right">
-                                {canCreateSupervisor && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => openDialog(supervisor)}
-                                  >
-                                    <Edit className="h-3 w-3" />
-                                  </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {supervisor.department || 'N/A'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="bg-blue-50">
+                              {supervisor.currentTasks || 0}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="bg-green-50">
+                              {supervisor.completedTasks || 0}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge 
+                              variant={supervisor.status === 'active' ? "default" : "secondary"}
+                              className={supervisor.status === 'active' ? "bg-green-100 text-green-800" : ""}
+                            >
+                              {supervisor.status === 'active' ? 'Active' : 'Inactive'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleToggleStatus(supervisor)}
+                                title={supervisor.status === 'active' ? 'Deactivate' : 'Activate'}
+                              >
+                                {supervisor.status === 'active' ? (
+                                  <XCircle className="h-4 w-4 text-amber-600" />
+                                ) : (
+                                  <CheckCircle className="h-4 w-4 text-green-600" />
                                 )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </TabsContent>
-              </Tabs>
-            )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openEditDialog(supervisor)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteSupervisor(supervisor._id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
-      </motion.div>
+      </div>
 
-      {/* Create/Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+      {/* Add/Edit Supervisor Dialog */}
+      <Dialog open={showAddSupervisorDialog} onOpenChange={(open) => {
+        if (!open) {
+          resetForm();
+        }
+        setShowAddSupervisorDialog(open);
+      }}>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>
-              {editingSupervisor ? "Edit Supervisor" : "Add New Supervisor"}
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <UserPlus className="h-5 w-5" />
+              {editingSupervisor ? 'Edit Supervisor' : 'Add New Supervisor'}
             </DialogTitle>
           </DialogHeader>
-          
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Full Name *</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Enter full name" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Email *</FormLabel>
-                      <FormControl>
-                        <Input type="email" placeholder="email@example.com" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                
-                <FormField
-                  control={form.control}
-                  name="phone"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Phone *</FormLabel>
-                      <FormControl>
-                        <Input placeholder="+91 9876543210" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
+
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Full Name *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  placeholder="John Doe"
+                  required
                 />
               </div>
-              
+              <div className="space-y-2">
+                <Label htmlFor="email">Email *</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  placeholder="john@example.com"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="phone">Phone Number</Label>
+                <Input
+                  id="phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                  placeholder="+1 (555) 123-4567"
+                />
+              </div>
               {!editingSupervisor && (
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Password *</FormLabel>
-                      <FormControl>
-                        <Input type="password" placeholder="••••••••" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password *</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({...formData, password: e.target.value})}
+                    placeholder="••••••••"
+                    required={!editingSupervisor}
+                  />
+                </div>
               )}
-              
-              <FormField
-                control={form.control}
-                name="department"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Department</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select department" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {departments.map((dept) => (
-                          <SelectItem key={dept} value={dept}>
-                            {dept}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="site"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Site *</FormLabel>
-                    <Select 
-                      onValueChange={field.onChange} 
-                      defaultValue={field.value}
-                      disabled={role === "manager" || role === "supervisor"}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select site" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {sites.map((site) => (
-                          <SelectItem key={site._id} value={site.name}>
-                            {site.name}
-                            {site.location && ` (${site.location})`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {(role === "manager" || role === "supervisor") && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Site is automatically set to: {selectedSiteName}
-                      </p>
-                    )}
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <div className="flex justify-end gap-2 pt-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setDialogOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={loading}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    editingSupervisor ? "Update" : "Create"
-                  )}
-                </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="department">Department</Label>
+                <Input
+                  id="department"
+                  value={formData.department}
+                  onChange={(e) => setFormData({...formData, department: e.target.value})}
+                  placeholder="Operations"
+                />
               </div>
-            </form>
-          </Form>
+              {editingSupervisor && (
+                <div className="space-y-2">
+                  <Label htmlFor="status">Status</Label>
+                  <select
+                    id="status"
+                    value={formData.status}
+                    onChange={(e) => setFormData({...formData, status: e.target.value as 'active' | 'inactive'})}
+                    className="w-full h-10 px-3 rounded-md border border-input bg-background"
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              resetForm();
+              setShowAddSupervisorDialog(false);
+            }}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={editingSupervisor ? handleUpdateSupervisor : handleAddSupervisor}
+              disabled={!formData.name || !formData.email || (!editingSupervisor && !formData.password)}
+            >
+              {editingSupervisor ? 'Update' : 'Add'} Supervisor
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Site Details Dialog */}
+      {selectedSite && (
+        <Dialog open={showSiteDetails} onOpenChange={setShowSiteDetails}>
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <Building className="h-5 w-5" />
+                {selectedSite.name}
+              </DialogTitle>
+            </DialogHeader>
+
+            <Tabs defaultValue="assigned" className="mt-4">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="assigned">
+                  Assigned ({selectedSite.assignedSupervisors.length})
+                </TabsTrigger>
+                <TabsTrigger value="available">
+                  Available ({selectedSite.availableSupervisors.length})
+                </TabsTrigger>
+                <TabsTrigger value="tasks">
+                  Tasks (P:{selectedSite.pendingTasks} | IP:{selectedSite.inProgressTasks} | C:{selectedSite.completedTasks})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="assigned" className="space-y-4 mt-4">
+                {selectedSite.assignedSupervisors.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No supervisors assigned to this site
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {selectedSite.assignedSupervisors.map((supervisor) => (
+                      <Card key={supervisor._id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-start gap-3">
+                            <Avatar>
+                              <AvatarFallback className="bg-green-100 text-green-700">
+                                {getInitials(supervisor.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between">
+                                <h4 className="font-semibold">{supervisor.name}</h4>
+                                <Badge variant="outline" className="bg-green-50">Active</Badge>
+                              </div>
+                              <div className="mt-2 space-y-1 text-sm">
+                                {supervisor.email && (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Mail className="h-3 w-3" />
+                                    <span className="text-xs">{supervisor.email}</span>
+                                  </div>
+                                )}
+                                {supervisor.phone && (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Phone className="h-3 w-3" />
+                                    <span className="text-xs">{supervisor.phone}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="mt-3 flex gap-2">
+                                <Badge variant="outline" className="bg-blue-50">
+                                  Current: {supervisor.currentTasks || 0}
+                                </Badge>
+                                <Badge variant="outline" className="bg-green-50">
+                                  Completed: {supervisor.completedTasks || 0}
+                                </Badge>
+                              </div>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="available" className="space-y-4 mt-4">
+                {selectedSite.availableSupervisors.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No available supervisors found
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {selectedSite.availableSupervisors.map((supervisor) => (
+                      <Card key={supervisor._id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-start gap-3">
+                            <Avatar>
+                              <AvatarFallback className="bg-blue-100 text-blue-700">
+                                {getInitials(supervisor.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <h4 className="font-semibold">{supervisor.name}</h4>
+                              <p className="text-xs text-muted-foreground">Available for assignment</p>
+                              <div className="mt-2 space-y-1 text-sm">
+                                {supervisor.email && (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Mail className="h-3 w-3" />
+                                    <span className="text-xs">{supervisor.email}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <Button size="sm" variant="outline" className="mt-3">
+                                <UserPlus className="h-3 w-3 mr-1" />
+                                Assign
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="tasks" className="space-y-4 mt-4">
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  <Card className="bg-yellow-50">
+                    <CardContent className="p-4 text-center">
+                      <AlertCircle className="h-8 w-8 mx-auto text-yellow-600 mb-2" />
+                      <p className="text-2xl font-bold text-yellow-700">{selectedSite.pendingTasks}</p>
+                      <p className="text-xs text-yellow-600">Pending</p>
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-blue-50">
+                    <CardContent className="p-4 text-center">
+                      <Clock className="h-8 w-8 mx-auto text-blue-600 mb-2" />
+                      <p className="text-2xl font-bold text-blue-700">{selectedSite.inProgressTasks}</p>
+                      <p className="text-xs text-blue-600">In Progress</p>
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-green-50">
+                    <CardContent className="p-4 text-center">
+                      <CheckCircle className="h-8 w-8 mx-auto text-green-600 mb-2" />
+                      <p className="text-2xl font-bold text-green-700">{selectedSite.completedTasks}</p>
+                      <p className="text-xs text-green-600">Completed</p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Site Information */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Site Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">Client</p>
+                        <p className="font-medium">{selectedSite.clientName}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Location</p>
+                        <p className="font-medium">{selectedSite.location}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Required Supervisors</p>
+                        <p className="font-medium">{selectedSite.requiredSupervisors}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Assigned Supervisors</p>
+                        <p className="font-medium">{selectedSite.assignedSupervisors.length}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Available Supervisors</p>
+                        <p className="font-medium">{selectedSite.availableSupervisors.length}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Staffing Status</p>
+                        <p className="font-medium">{getStaffingStatusBadge(selectedSite.staffingStatus)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };
 
-export default Supervisors;
+export default ManagerSiteSupervisorsPage;

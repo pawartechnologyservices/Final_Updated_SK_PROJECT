@@ -4,17 +4,20 @@ export interface IAttendance extends Document {
   employeeId: string;
   employeeName: string;
   date: string;
-  checkInTime: string;
+  checkInTime: string | null;
   checkOutTime: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
   breakTime: number;
-  status: 'present' | 'absent' | 'half-day' | 'leave';
+  status: 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off';
   isCheckedIn: boolean;
   isOnBreak: boolean;
   department: string;
+  siteName?: string;
+  siteId?: string;
   supervisorId?: string;
+  remarks?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,6 +28,7 @@ const attendanceSchema = new Schema<IAttendance>(
       type: String,
       required: [true, 'Employee ID is required'],
       trim: true,
+      index: true,
     },
     employeeName: {
       type: String,
@@ -39,7 +43,7 @@ const attendanceSchema = new Schema<IAttendance>(
     },
     checkInTime: {
       type: String,
-      required: [true, 'Check-in time is required'],
+      default: null,
     },
     checkOutTime: {
       type: String,
@@ -65,8 +69,8 @@ const attendanceSchema = new Schema<IAttendance>(
     },
     status: {
       type: String,
-      enum: ['present', 'absent', 'half-day', 'leave'],
-      default: 'present',
+      enum: ['present', 'absent', 'half-day', 'leave', 'weekly-off'],
+      default: 'absent',
     },
     isCheckedIn: {
       type: Boolean,
@@ -76,9 +80,26 @@ const attendanceSchema = new Schema<IAttendance>(
       type: Boolean,
       default: false,
     },
+    department: {
+      type: String,
+      default: 'General',
+    },
+    siteName: {
+      type: String,
+      default: null,
+    },
+    siteId: {
+      type: String,
+      default: null,
+    },
     supervisorId: {
       type: String,
       trim: true,
+      default: null,
+    },
+    remarks: {
+      type: String,
+      default: '',
     },
   },
   {
@@ -98,8 +119,8 @@ const attendanceSchema = new Schema<IAttendance>(
 attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ status: 1 });
 attendanceSchema.index({ createdAt: -1 });
+attendanceSchema.index({ supervisorId: 1, date: 1 });
 
 const Attendance: Model<IAttendance> = mongoose.model<IAttendance>('Attendance', attendanceSchema);
 
 export default Attendance;
-
