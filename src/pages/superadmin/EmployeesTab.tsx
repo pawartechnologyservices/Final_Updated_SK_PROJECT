@@ -330,7 +330,9 @@ const EmployeesTab = ({
           const employee = {
             _id: emp._id || emp.id || `emp_${index}`,
             id: emp._id || emp.id || `emp_${index}`,
-            employeeId: emp.employeeId || emp.employeeID || `EMP${String(index + 1).padStart(4, '0')}`,
+            employeeId: emp.employeeId || emp.employeeID ? 
+  `SK${((employeesPage - 1) * employeesItemsPerPage) + index + 1}` : 
+  `SK${((employeesPage - 1) * employeesItemsPerPage) + index + 1}`,
             name: emp.name || emp.employeeName || "Unknown",
             email: emp.email || "",
             phone: emp.phone || emp.mobile || "",

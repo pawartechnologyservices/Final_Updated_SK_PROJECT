@@ -2127,6 +2127,14 @@ const ManagerDashboard = () => {
     toast.success('Data exported successfully');
   };
 
+  // Handle navigation to attendance page with date
+ // Update the handleNavigateToAttendance function in ManagerDashboard.tsx
+// Update the handleNavigateToAttendance function in ManagerDashboard.tsx
+const handleNavigateToAttendance = (date: string) => {
+  // Navigate to managerattendance with the team-attendance tab active and the selected date
+  navigate(`/manager/managerattendance?tab=team-attendance&date=${date}`);
+};
+
   // Custom tooltips
   const CustomPieTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -2393,7 +2401,7 @@ const ManagerDashboard = () => {
                           >
                             <Card
                               className="cursor-pointer transform transition-all duration-200 hover:shadow-lg border-2 hover:border-blue-300"
-                              onClick={() => navigate(`/manager/attendance?date=${dayData.date}`)}
+                              onClick={() => handleNavigateToAttendance(dayData.date)}
                             >
                               <CardContent className="p-3">
                                 <div className="text-center mb-2">
@@ -2523,7 +2531,7 @@ const ManagerDashboard = () => {
                       <motion.div
                         whileHover={{ scale: 1.01 }}
                         className="cursor-pointer"
-                        onClick={() => navigate(`/manager/attendance?date=${currentDayData.date}`)}
+                        onClick={() => handleNavigateToAttendance(currentDayData.date)}
                       >
                         <div className="w-full h-80 bg-gradient-to-br from-blue-50/50 to-green-50/50 rounded-xl p-4 border-2 border-blue-200/50 hover:border-blue-400 transition-colors duration-300 backdrop-blur-sm">
                           <ResponsiveContainer width="100%" height="100%">
@@ -2701,7 +2709,7 @@ const ManagerDashboard = () => {
                           <th className="h-12 px-4 text-left font-medium text-red-700 bg-red-50">Absent</th>
                           <th className="h-12 px-4 text-left font-medium text-red-700 bg-red-50">Shortage</th>
                           <th className="h-12 px-4 text-left font-medium">Rate</th>
-                          <th className="h-12 px-4 text-left font-medium">Actions</th>
+                          {/* <th className="h-12 px-4 text-left font-medium">Actions</th> */}
                         </tr>
                       </thead>
                       <tbody>
@@ -2735,12 +2743,12 @@ const ManagerDashboard = () => {
                                 <td className="p-4 align-middle font-bold text-red-700 bg-red-50">{site.absent}</td>
                                 <td className="p-4 align-middle font-bold text-red-700 bg-red-50">{site.shortage}</td>
                                 <td className="p-4 align-middle font-bold">{site.attendanceRate}%</td>
-                                <td className="p-4 align-middle">
+                                {/* <td className="p-4 align-middle">
                                   <Button variant="outline" size="sm" onClick={() => handleViewDetails(site)}>
                                     <Eye className="h-4 w-4 mr-1" />
                                     View
                                   </Button>
-                                </td>
+                                </td> */}
                               </tr>
                             );
                           })

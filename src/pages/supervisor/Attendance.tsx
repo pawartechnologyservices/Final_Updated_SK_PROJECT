@@ -178,7 +178,7 @@ interface Site {
   status?: string;
 }
 
-// New interface for status update
+// Interface for status update
 interface StatusUpdateData {
   employeeId: string;
   employeeName: string;
@@ -187,6 +187,16 @@ interface StatusUpdateData {
   newStatus: 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off';
   date: string;
   remarks: string;
+}
+
+// Interface for attendance summary (same as in SupervisorDashboard)
+interface AttendanceSummary {
+  totalEmployees: number;
+  presentCount: number;
+  absentCount: number;
+  weeklyOffCount: number;
+  leaveCount: number;
+  halfDayCount: number;
 }
 
 // Mobile responsive employee attendance card
@@ -387,16 +397,6 @@ const MobileEmployeeAttendanceCard = ({
                 Manual
               </Button>
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-2 w-full"
-              onClick={() => onStatusUpdate(employee, null)}
-              disabled={updatingStatus}
-            >
-              <Edit className="mr-2 h-4 w-4" />
-              Update Status
-            </Button>
           </div>
         )}
       </CardContent>
@@ -589,6 +589,16 @@ const Attendance = () => {
     remarks: ''
   });
   const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  // Attendance summary state (same as in SupervisorDashboard)
+  const [summary, setSummary] = useState<AttendanceSummary>({
+    totalEmployees: 0,
+    presentCount: 0,
+    absentCount: 0,
+    weeklyOffCount: 0,
+    leaveCount: 0,
+    halfDayCount: 0
+  });
 
   // Week selection for register view
   const [selectedWeek, setSelectedWeek] = useState<number>(2);
@@ -980,12 +990,27 @@ const Attendance = () => {
         await fetchAllSites();
         await fetchEmployees();
         await loadSupervisorAttendance();
-        await loadAttendanceRecords(selectedDate);
       };
       
       initializeData();
     }
   }, [currentUser]);
+
+  // Load attendance records when employees or selectedDate changes
+  useEffect(() => {
+    if (employees.length > 0) {
+      loadAttendanceRecords(selectedDate);
+    } else {
+      setSummary({
+        totalEmployees: 0,
+        presentCount: 0,
+        absentCount: 0,
+        weeklyOffCount: 0,
+        leaveCount: 0,
+        halfDayCount: 0
+      });
+    }
+  }, [employees, selectedDate]);
 
   // Filter employees based on search and filters
   useEffect(() => {
@@ -1374,11 +1399,26 @@ const Attendance = () => {
     }
   };
 
-  // Load attendance records for selected date
+  // Load attendance records for selected date - EXACT SAME AS SUPERVISORDASHBOARD
   const loadAttendanceRecords = async (date: string) => {
     try {
       setLoadingAttendance(true);
       console.log('📋 Fetching attendance for date:', date);
+      
+      if (employees.length === 0) {
+        console.log("No employees to fetch attendance for");
+        setAttendanceRecords([]);
+        setSummary({
+          totalEmployees: 0,
+          presentCount: 0,
+          absentCount: 0,
+          weeklyOffCount: 0,
+          leaveCount: 0,
+          halfDayCount: 0
+        });
+        setLoadingAttendance(false);
+        return;
+      }
       
       const response = await axios.get(`${API_URL}/attendance`, {
         params: { date }
@@ -1387,10 +1427,11 @@ const Attendance = () => {
       console.log('Attendance API response:', response.data);
       
       if (response.data && response.data.success) {
+        const allRecords = response.data.data || [];
+        
         // Process records to ensure no negative hours
-        const processedRecords = (response.data.data || []).map((record: any) => {
+        const processedRecords = allRecords.map((record: any) => {
           if (record.checkInTime && record.checkOutTime) {
-            // Recalculate hours if they're negative
             const calculatedHours = calculateTotalHours(record.checkInTime, record.checkOutTime);
             if (calculatedHours > 0 && record.totalHours < 0) {
               record.totalHours = calculatedHours;
@@ -1399,14 +1440,77 @@ const Attendance = () => {
           return record;
         });
         
-        setAttendanceRecords(processedRecords);
+        const employeeIdsFromSites = new Set(employees.map(emp => emp._id));
+        const employeeNamesFromSites = new Set(employees.map(emp => emp.name));
+        
+        const filteredRecords = processedRecords.filter((record: any) => 
+          employeeIdsFromSites.has(record.employeeId) || 
+          employeeNamesFromSites.has(record.employeeName)
+        );
+        
+        console.log(`📊 Total attendance records: ${allRecords.length}, Filtered: ${filteredRecords.length}`);
+        
+        setAttendanceRecords(filteredRecords);
+        
+        // Calculate counts - EXACT SAME LOGIC AS SUPERVISORDASHBOARD
+        const presentCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'present').length;
+        const weeklyOffCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'weekly-off').length;
+        const leaveCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'leave').length;
+        const halfDayCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'half-day').length;
+        
+        // Employees with status 'absent' in records
+        const absentFromRecords = filteredRecords.filter((r: AttendanceRecord) => r.status === 'absent').length;
+        
+        // Employees with NO attendance record at all
+        const employeesWithRecords = new Set(filteredRecords.map(r => r.employeeId));
+        const employeesWithoutRecords = employees.filter(emp => !employeesWithRecords.has(emp._id)).length;
+        
+        // Total absent = absent from records + employees without records
+        // Employees on weekly off are NOT counted as absent
+        const totalAbsentCount = absentFromRecords + employeesWithoutRecords;
+        
+        console.log(`📊 Summary - Present: ${presentCount}, Weekly Off: ${weeklyOffCount}, Leave: ${leaveCount}, Half Day: ${halfDayCount}, Absent: ${totalAbsentCount} (${absentFromRecords} from records + ${employeesWithoutRecords} without records)`);
+        
+        setSummary({
+          totalEmployees: employees.length,
+          presentCount,
+          absentCount: totalAbsentCount,
+          weeklyOffCount,
+          leaveCount,
+          halfDayCount
+        });
       } else {
         console.error('Failed to load attendance:', response.data?.message);
         setAttendanceRecords([]);
+        
+        // If no attendance records at all, all employees are absent
+        setSummary({
+          totalEmployees: employees.length,
+          presentCount: 0,
+          absentCount: employees.length,
+          weeklyOffCount: 0,
+          leaveCount: 0,
+          halfDayCount: 0
+        });
       }
     } catch (error: any) {
       console.error('Error loading attendance:', error);
+      
+      if (error.code === 'ERR_NETWORK') {
+        toast.error("Network error: Cannot fetch attendance data");
+      }
+      
       setAttendanceRecords([]);
+      
+      // On error, all employees are considered absent
+      setSummary({
+        totalEmployees: employees.length,
+        presentCount: 0,
+        absentCount: employees.length,
+        weeklyOffCount: 0,
+        leaveCount: 0,
+        halfDayCount: 0
+      });
     } finally {
       setLoadingAttendance(false);
     }
@@ -1630,30 +1734,6 @@ const Attendance = () => {
     );
   };
 
-  const calculateAttendanceStats = () => {
-    const records = attendanceRecords.filter(record => record.date === selectedDate);
-    const totalEmployees = filteredEmployees.length;
-    const presentCount = records.filter(r => r.status === 'present').length;
-    const absentCount = records.filter(r => r.status === 'absent').length;
-    const halfDayCount = records.filter(r => r.status === 'half-day').length;
-    const leaveCount = records.filter(r => r.status === 'leave').length;
-    const weeklyOffCount = records.filter(r => r.status === 'weekly-off').length;
-    const checkedInCount = records.filter(r => r.isCheckedIn).length;
-    
-    return {
-      totalEmployees,
-      presentCount,
-      absentCount,
-      halfDayCount,
-      leaveCount,
-      weeklyOffCount,
-      checkedInCount,
-      attendanceRate: totalEmployees > 0 ? Math.round((presentCount / totalEmployees) * 100) : 0
-    };
-  };
-
-  const stats = calculateAttendanceStats();
-
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'present':
@@ -1734,7 +1814,8 @@ const Attendance = () => {
       if (data.success) {
         toast.success("Attendance recorded successfully!");
         setManualAttendanceDialogOpen(false);
-        loadAttendanceRecords(selectedDate);
+        // Force refresh attendance records
+        await loadAttendanceRecords(selectedDate);
       } else {
         toast.error(data.message || "Error recording attendance");
       }
@@ -1744,8 +1825,9 @@ const Attendance = () => {
     }
   };
 
-  // New function to handle status update
+  // Fixed: Handle status update - now properly updates state and forces refresh
   const handleStatusUpdate = (employee: Employee, attendanceRecord: AttendanceRecord | null) => {
+    console.log('Opening status update dialog for:', employee.name, 'Record:', attendanceRecord);
     setSelectedEmployeeForStatusUpdate(employee);
     setSelectedAttendanceForStatusUpdate(attendanceRecord);
     setStatusUpdateData({
@@ -1760,7 +1842,7 @@ const Attendance = () => {
     setStatusUpdateDialogOpen(true);
   };
 
-  // Submit status update
+  // Fixed: Submit status update - now properly updates attendance records and UI
   const submitStatusUpdate = async () => {
     if (!selectedEmployeeForStatusUpdate) return;
 
@@ -1793,7 +1875,87 @@ const Attendance = () => {
         toast.success(`Status updated to ${statusUpdateData.newStatus.replace('-', ' ')} for ${selectedEmployeeForStatusUpdate.name}`);
         setStatusUpdateDialogOpen(false);
         
-        // Refresh attendance records
+        // CRITICAL FIX: Immediately update local attendance records to reflect the change
+        // This ensures the UI updates instantly without waiting for API refresh
+        const newRecord: AttendanceRecord = {
+          _id: data.data?._id || `temp-${Date.now()}`,
+          employeeId: statusUpdateData.employeeId,
+          employeeName: selectedEmployeeForStatusUpdate.name,
+          date: statusUpdateData.date,
+          checkInTime: data.data?.checkInTime || null,
+          checkOutTime: data.data?.checkOutTime || null,
+          breakStartTime: data.data?.breakStartTime || null,
+          breakEndTime: data.data?.breakEndTime || null,
+          totalHours: data.data?.totalHours || 0,
+          breakTime: data.data?.breakTime || 0,
+          status: statusUpdateData.newStatus,
+          isCheckedIn: data.data?.isCheckedIn || false,
+          isOnBreak: data.data?.isOnBreak || false,
+          supervisorId: currentSupervisor.supervisorId,
+          remarks: statusUpdateData.remarks
+        };
+
+        setAttendanceRecords(prevRecords => {
+          // Check if we already have a record for this employee on this date
+          const existingRecordIndex = prevRecords.findIndex(
+            r => r.employeeId === statusUpdateData.employeeId && r.date === statusUpdateData.date
+          );
+          
+          if (existingRecordIndex >= 0) {
+            // Update existing record
+            const updatedRecords = [...prevRecords];
+            updatedRecords[existingRecordIndex] = {
+              ...updatedRecords[existingRecordIndex],
+              ...newRecord
+            };
+            return updatedRecords;
+          } else {
+            // Add new record
+            return [...prevRecords, newRecord];
+          }
+        });
+
+        // Also update the summary counts
+        setSummary(prevSummary => {
+          // If this was an existing record, adjust counts
+          if (selectedAttendanceForStatusUpdate) {
+            const oldStatus = selectedAttendanceForStatusUpdate.status;
+            const newStatus = statusUpdateData.newStatus;
+            
+            // Create a new summary object with adjusted counts
+            const newSummary = { ...prevSummary };
+            
+            // Decrement old status
+            if (oldStatus === 'present') newSummary.presentCount--;
+            else if (oldStatus === 'absent') newSummary.absentCount--;
+            else if (oldStatus === 'half-day') newSummary.halfDayCount--;
+            else if (oldStatus === 'leave') newSummary.leaveCount--;
+            else if (oldStatus === 'weekly-off') newSummary.weeklyOffCount--;
+            
+            // Increment new status
+            if (newStatus === 'present') newSummary.presentCount++;
+            else if (newStatus === 'absent') newSummary.absentCount++;
+            else if (newStatus === 'half-day') newSummary.halfDayCount++;
+            else if (newStatus === 'leave') newSummary.leaveCount++;
+            else if (newStatus === 'weekly-off') newSummary.weeklyOffCount++;
+            
+            return newSummary;
+          } else {
+            // This is a new record
+            const newSummary = { ...prevSummary };
+            
+            // Increment new status
+            if (statusUpdateData.newStatus === 'present') newSummary.presentCount++;
+            else if (statusUpdateData.newStatus === 'absent') newSummary.absentCount++;
+            else if (statusUpdateData.newStatus === 'half-day') newSummary.halfDayCount++;
+            else if (statusUpdateData.newStatus === 'leave') newSummary.leaveCount++;
+            else if (statusUpdateData.newStatus === 'weekly-off') newSummary.weeklyOffCount++;
+            
+            return newSummary;
+          }
+        });
+
+        // Force refresh attendance records from API to ensure consistency
         await loadAttendanceRecords(selectedDate);
         
         // Also refresh weekly summaries
@@ -1812,8 +1974,6 @@ const Attendance = () => {
       
       // More detailed error handling
       if (error.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
         console.error('Error response data:', error.response.data);
         console.error('Error response status:', error.response.status);
         
@@ -1825,16 +1985,12 @@ const Attendance = () => {
           toast.error(`Error: ${error.response.data.message || "Failed to update status"}`);
         }
       } else if (error.request) {
-        // The request was made but no response was received
         console.error('No response received:', error.request);
         toast.error("No response from server. Please check if backend is running.");
       } else {
-        // Something happened in setting up the request that triggered an Error
         console.error('Error message:', error.message);
         toast.error(`Error: ${error.message}`);
       }
-      
-      // Don't fallback to demo mode - show error and let user try again
     } finally {
       setUpdatingStatus(false);
     }
@@ -1852,7 +2008,7 @@ const Attendance = () => {
       
       if (data.success) {
         toast.success(`${employee.name} checked in successfully!`);
-        loadAttendanceRecords(selectedDate);
+        await loadAttendanceRecords(selectedDate);
       } else {
         toast.error(data.message || "Error checking in");
       }
@@ -1872,7 +2028,7 @@ const Attendance = () => {
       
       if (data.success) {
         toast.success(`${employee.name} checked out successfully!`);
-        loadAttendanceRecords(selectedDate);
+        await loadAttendanceRecords(selectedDate);
       } else {
         toast.error(data.message || "Error checking out");
       }
@@ -1892,7 +2048,7 @@ const Attendance = () => {
       
       if (data.success) {
         toast.success(`${employee.name} break started!`);
-        loadAttendanceRecords(selectedDate);
+        await loadAttendanceRecords(selectedDate);
       } else {
         toast.error(data.message || "Error starting break");
       }
@@ -1912,7 +2068,7 @@ const Attendance = () => {
       
       if (data.success) {
         toast.success(`${employee.name} break ended!`);
-        loadAttendanceRecords(selectedDate);
+        await loadAttendanceRecords(selectedDate);
       } else {
         toast.error(data.message || "Error ending break");
       }
@@ -2004,11 +2160,6 @@ const Attendance = () => {
       loadWeeklySummaries(weekStart, weekEnd);
     }
   }, [selectedYear, selectedMonth, selectedWeek, employees]);
-
-  // Load attendance records when date changes
-  useEffect(() => {
-    loadAttendanceRecords(selectedDate);
-  }, [selectedDate]);
 
   // Check if user is a supervisor
   if (!isAuthenticated || !currentUser) {
@@ -2513,47 +2664,174 @@ const Attendance = () => {
             </Card>
           </TabsContent>
 
-          {/* Employee Attendance Tab */}
+          {/* Employee Attendance Tab - Using summary state for counts */}
           <TabsContent value="employee-attendance" className="space-y-6">
+            {/* Main Stats Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+              {/* Total Employees Card */}
               <Card>
                 <CardHeader className="p-3 md:p-6">
                   <CardTitle className="text-xs md:text-sm font-medium">Total Employees</CardTitle>
                   <CardContent className="p-0 pt-2">
-                    <div className="text-xl md:text-2xl font-bold">{stats.totalEmployees}</div>
+                    <div className="text-xl md:text-2xl font-bold">{summary.totalEmployees}</div>
                     <p className="text-xs text-muted-foreground">From task-assigned sites</p>
                   </CardContent>
                 </CardHeader>
               </Card>
-              <Card>
-                <CardHeader className="p-3 md:p-6">
-                  <CardTitle className="text-xs md:text-sm font-medium">Present Today</CardTitle>
-                  <CardContent className="p-0 pt-2">
-                    <div className="text-xl md:text-2xl font-bold text-green-600">{stats.presentCount}</div>
-                    <p className="text-xs text-muted-foreground">Checked in: {stats.checkedInCount}</p>
-                  </CardContent>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="p-3 md:p-6">
-                  <CardTitle className="text-xs md:text-sm font-medium">Absent Today</CardTitle>
-                  <CardContent className="p-0 pt-2">
-                    <div className="text-xl md:text-2xl font-bold text-red-600">{stats.absentCount}</div>
-                    <p className="text-xs text-muted-foreground">Employees absent</p>
-                  </CardContent>
-                </CardHeader>
-              </Card>
+
+              {/* Present Card - Clickable like SupervisorDashboard */}
+              <motion.div
+                whileHover={summary.presentCount > 0 ? { scale: 1.02 } : {}}
+                whileTap={summary.presentCount > 0 ? { scale: 0.98 } : {}}
+                className={summary.presentCount > 0 ? "cursor-pointer" : "cursor-default opacity-75"}
+                onClick={() => {
+                  if (summary.presentCount > 0) {
+                    toast.info(`Showing ${summary.presentCount} present employees`);
+                  }
+                }}
+              >
+                <Card className="bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 hover:shadow-lg transition-shadow">
+                  <CardHeader className="p-3 md:p-6">
+                    <CardTitle className="text-xs md:text-sm font-medium text-green-800 dark:text-green-300">Present Today</CardTitle>
+                    <CardContent className="p-0 pt-2">
+                      <div className="text-xl md:text-2xl font-bold text-green-600">{summary.presentCount}</div>
+                      <p className="text-xs text-green-700 dark:text-green-500">
+                        {summary.totalEmployees > 0 ? Math.round((summary.presentCount / summary.totalEmployees) * 100) : 0}% of total
+                      </p>
+                    </CardContent>
+                  </CardHeader>
+                </Card>
+              </motion.div>
+
+              {/* Absent Card - Clickable like SupervisorDashboard */}
+              <motion.div
+                whileHover={summary.absentCount > 0 ? { scale: 1.02 } : {}}
+                whileTap={summary.absentCount > 0 ? { scale: 0.98 } : {}}
+                className={summary.absentCount > 0 ? "cursor-pointer" : "cursor-default opacity-75"}
+                onClick={() => {
+                  if (summary.absentCount > 0) {
+                    toast.info(`Showing ${summary.absentCount} absent employees`);
+                  }
+                }}
+              >
+                <Card className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 hover:shadow-lg transition-shadow">
+                  <CardHeader className="p-3 md:p-6">
+                    <CardTitle className="text-xs md:text-sm font-medium text-red-800 dark:text-red-300">Absent Today</CardTitle>
+                    <CardContent className="p-0 pt-2">
+                      <div className="text-xl md:text-2xl font-bold text-red-600">{summary.absentCount}</div>
+                      <p className="text-xs text-red-700 dark:text-red-500">
+                        {summary.totalEmployees > 0 ? Math.round((summary.absentCount / summary.totalEmployees) * 100) : 0}% of total
+                      </p>
+                    </CardContent>
+                  </CardHeader>
+                </Card>
+              </motion.div>
+
+              {/* Attendance Rate Card */}
               <Card>
                 <CardHeader className="p-3 md:p-6">
                   <CardTitle className="text-xs md:text-sm font-medium">Attendance Rate</CardTitle>
                   <CardContent className="p-0 pt-2">
-                    <div className="text-xl md:text-2xl font-bold text-blue-600">{stats.attendanceRate}%</div>
+                    <div className="text-xl md:text-2xl font-bold text-blue-600">
+                      {summary.totalEmployees > 0 ? Math.round((summary.presentCount / summary.totalEmployees) * 100) : 0}%
+                    </div>
                     <p className="text-xs text-muted-foreground">Overall rate</p>
                   </CardContent>
                 </CardHeader>
               </Card>
             </div>
 
+            {/* Additional Stats - Half Day, Leave, Weekly Off (Same as SupervisorDashboard) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+              {/* Half Day Card */}
+              <Card className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">Half Day Today</p>
+                      <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{summary.halfDayCount}</p>
+                      <p className="text-xs text-yellow-700 dark:text-yellow-500 mt-1">
+                        {summary.totalEmployees > 0 ? Math.round((summary.halfDayCount / summary.totalEmployees) * 100) : 0}% of total
+                      </p>
+                    </div>
+                    <div className="p-2 bg-yellow-100 dark:bg-yellow-800 rounded-full">
+                      <Clock className="h-5 w-5 text-yellow-600 dark:text-yellow-300" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* On Leave Card */}
+              <Card className="bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-blue-800 dark:text-blue-300">On Leave Today</p>
+                      <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{summary.leaveCount}</p>
+                      <p className="text-xs text-blue-700 dark:text-blue-500 mt-1">
+                        {summary.totalEmployees > 0 ? Math.round((summary.leaveCount / summary.totalEmployees) * 100) : 0}% of total
+                      </p>
+                    </div>
+                    <div className="p-2 bg-blue-100 dark:bg-blue-800 rounded-full">
+                      <CalendarDays className="h-5 w-5 text-blue-600 dark:text-blue-300" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Weekly Off Card */}
+              <Card className="bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-purple-800 dark:text-purple-300">Weekly Off Today</p>
+                      <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">{summary.weeklyOffCount}</p>
+                      <p className="text-xs text-purple-700 dark:text-purple-500 mt-1">
+                        {summary.totalEmployees > 0 ? Math.round((summary.weeklyOffCount / summary.totalEmployees) * 100) : 0}% of total
+                      </p>
+                    </div>
+                    <div className="p-2 bg-purple-100 dark:bg-purple-800 rounded-full">
+                      <Calendar className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Summary Footer - Same as SupervisorDashboard */}
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center">
+                      <CheckCircle className="h-4 w-4 text-green-600 mr-1" />
+                      <span className="text-sm">Present: {summary.presentCount}</span>
+                    </div>
+                    <div className="flex items-center ml-4">
+                      <XCircle className="h-4 w-4 text-red-600 mr-1" />
+                      <span className="text-sm">Absent: {summary.absentCount}</span>
+                    </div>
+                    <div className="flex items-center ml-4">
+                      <Calendar className="h-4 w-4 text-purple-600 mr-1" />
+                      <span className="text-sm">Weekly Off: {summary.weeklyOffCount}</span>
+                    </div>
+                    <div className="flex items-center ml-4">
+                      <CalendarDays className="h-4 w-4 text-blue-600 mr-1" />
+                      <span className="text-sm">Leave: {summary.leaveCount}</span>
+                    </div>
+                    <div className="flex items-center ml-4">
+                      <Clock className="h-4 w-4 text-yellow-600 mr-1" />
+                      <span className="text-sm">Half Day: {summary.halfDayCount}</span>
+                    </div>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Last updated: {new Date().toLocaleTimeString()}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Main Attendance Table Card */}
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2739,17 +3017,6 @@ const Attendance = () => {
                                         ) : (
                                           <Badge variant="outline">No Record</Badge>
                                         )}
-                                        {/* Status Update Button */}
-                                        <Button
-                                          size="sm"
-                                          variant="ghost"
-                                          className="h-6 w-6 p-0"
-                                          onClick={() => handleStatusUpdate(employee, attendanceRecord || null)}
-                                          title="Update Status"
-                                          disabled={updatingStatus}
-                                        >
-                                          <Edit className="h-3 w-3" />
-                                        </Button>
                                       </div>
                                     </TableCell>
                                     <TableCell className="text-right">
@@ -2814,27 +3081,6 @@ const Attendance = () => {
                         </div>
                       </div>
                     )}
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mt-6">
-                      <div className="p-3 md:p-4 border rounded-lg">
-                        <div className="text-xs md:text-sm text-muted-foreground">Half Day</div>
-                        <div className="text-lg md:text-2xl font-bold text-yellow-600">{stats.halfDayCount}</div>
-                      </div>
-                      <div className="p-3 md:p-4 border rounded-lg">
-                        <div className="text-xs md:text-sm text-muted-foreground">On Leave</div>
-                        <div className="text-lg md:text-2xl font-bold text-blue-600">{stats.leaveCount}</div>
-                      </div>
-                      <div className="p-3 md:p-4 border rounded-lg">
-                        <div className="text-xs md:text-sm text-muted-foreground">Weekly Off</div>
-                        <div className="text-lg md:text-2xl font-bold text-purple-600">{stats.weeklyOffCount}</div>
-                      </div>
-                      <div className="p-3 md:p-4 border rounded-lg">
-                        <div className="text-xs md:text-sm text-muted-foreground">Total Hours</div>
-                        <div className="text-lg md:text-2xl font-bold">
-                          {attendanceRecords.reduce((sum, record) => sum + record.totalHours, 0).toFixed(2)} hrs
-                        </div>
-                      </div>
-                    </div>
                   </>
                 )}
               </CardContent>

@@ -90,13 +90,43 @@ const initialDocuments: Document[] = [
   },
   {
     id: "5",
+    name: "Company Logo",
+    type: "PNG",
+    size: "0.5 MB",
+    uploadedBy: "Marketing",
+    date: "2024-01-11",
+    category: "image",
+    description: "Company logo for branding"
+  },
+  {
+    id: "6",
+    name: "Product Image",
+    type: "JPG",
+    size: "1.2 MB",
+    uploadedBy: "Marketing",
+    date: "2024-01-10",
+    category: "image",
+    description: "Product photography"
+  },
+  {
+    id: "7",
     name: "Experience Certificate",
     type: "DOCX",
     size: "0.9 MB",
     uploadedBy: "HR Manager",
-    date: "2024-01-11",
+    date: "2024-01-09",
     category: "template",
     description: "Employee experience certificate template"
+  },
+  {
+    id: "8",
+    name: "Q4 Financial Report",
+    type: "XLSX",
+    size: "3.1 MB",
+    uploadedBy: "Finance",
+    date: "2024-01-08",
+    category: "generated",
+    description: "Quarterly financial report"
   }
 ];
 
@@ -180,9 +210,9 @@ const Documents = () => {
 const StatsCards = () => {
   const [stats, setStats] = useState({
     total: 0,
-    uploaded: 0,
     templates: 0,
-    generated: 0
+    generated: 0,
+    images: 0
   });
 
   useEffect(() => {
@@ -191,31 +221,44 @@ const StatsCards = () => {
         const result = await documentService.getDocuments();
         if (result.success && result.data) {
           const documents = result.data;
-          const uploadedCount = documents.filter((d: DocumentData) =>
-            d.category === "document" || d.category === "image" || d.category === "spreadsheet" || d.category === "presentation" || d.category === "other" || d.category === "uploaded"
+          
+          // Calculate stats based on categories
+          const templateCount = documents.filter((d: DocumentData) => 
+            d.category === "template"
+          ).length;
+          
+          const generatedCount = documents.filter((d: DocumentData) => 
+            d.category === "generated"
+          ).length;
+          
+          const imageCount = documents.filter((d: DocumentData) => 
+            d.category === "image" || 
+            d.mimetype?.startsWith('image/') || 
+            d.originalname?.match(/\.(jpg|jpeg|png|gif|webp)$/i)
           ).length;
 
           setStats({
             total: documents.length,
-            uploaded: uploadedCount,
-            templates: documents.filter((d: DocumentData) => d.category === "template").length,
-            generated: documents.filter((d: DocumentData) => d.category === "generated").length
+            templates: templateCount,
+            generated: generatedCount,
+            images: imageCount
           });
         } else {
+          // Use initial documents as fallback
           setStats({
             total: initialDocuments.length,
-            uploaded: initialDocuments.filter(d => d.category === "uploaded").length,
             templates: initialDocuments.filter(d => d.category === "template").length,
-            generated: initialDocuments.filter(d => d.category === "generated").length
+            generated: initialDocuments.filter(d => d.category === "generated").length,
+            images: initialDocuments.filter(d => d.category === "image").length
           });
         }
       } catch (error) {
         console.error("Error fetching stats:", error);
         setStats({
           total: initialDocuments.length,
-          uploaded: initialDocuments.filter(d => d.category === "uploaded").length,
           templates: initialDocuments.filter(d => d.category === "template").length,
-          generated: initialDocuments.filter(d => d.category === "generated").length
+          generated: initialDocuments.filter(d => d.category === "generated").length,
+          images: initialDocuments.filter(d => d.category === "image").length
         });
       }
     };
@@ -247,21 +290,6 @@ const StatsCards = () => {
         whileHover={{ y: -3, md: { y: -5 }, transition: { duration: 0.2 } }}
       >
         <StatCard
-          title="Uploaded"
-          value={stats.uploaded}
-          icon={<Upload className="h-4 w-4 md:h-6 md:w-6" />}
-          trend="+8%"
-          color="from-green-500 to-emerald-500"
-          className="shadow-xl"
-        />
-      </motion.div>
-      <motion.div
-        initial={{ opacity: 0, y: 30, scale: 0.9 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ delay: 0.3 }}
-        whileHover={{ y: -3, md: { y: -5 }, transition: { duration: 0.2 } }}
-      >
-        <StatCard
           title="Templates"
           value={stats.templates}
           icon={<FileCode className="h-4 w-4 md:h-6 md:w-6" />}
@@ -273,7 +301,7 @@ const StatsCards = () => {
       <motion.div
         initial={{ opacity: 0, y: 30, scale: 0.9 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ delay: 0.4 }}
+        transition={{ delay: 0.3 }}
         whileHover={{ y: -3, md: { y: -5 }, transition: { duration: 0.2 } }}
       >
         <StatCard
@@ -282,6 +310,21 @@ const StatsCards = () => {
           icon={<Zap className="h-4 w-4 md:h-6 md:w-6" />}
           trend="+24%"
           color="from-orange-500 to-amber-500"
+          className="shadow-xl"
+        />
+      </motion.div>
+      <motion.div
+        initial={{ opacity: 0, y: 30, scale: 0.9 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ delay: 0.4 }}
+        whileHover={{ y: -3, md: { y: -5 }, transition: { duration: 0.2 } }}
+      >
+        <StatCard
+          title="Images"
+          value={stats.images}
+          icon={<FileImage className="h-4 w-4 md:h-6 md:w-6" />}
+          trend="+8%"
+          color="from-green-500 to-emerald-500"
           className="shadow-xl"
         />
       </motion.div>
@@ -387,7 +430,7 @@ const AllDocumentsSection = () => {
       const documentName = formData.get("document-name") as string;
       const description = formData.get("description") as string;
       const folder = formData.get("folder") as string || "documents";
-      const category = formData.get("category") as string || "uploaded";
+      const frontendCategory = formData.get("category") as string || "uploaded";
 
       if (!fileInput.files || fileInput.files.length === 0) {
         toast.error("Please select a file to upload");
@@ -396,12 +439,41 @@ const AllDocumentsSection = () => {
       }
 
       const file = fileInput.files[0];
+      
+      // Map frontend category to backend category
+      let backendCategory: string = "document"; // Default
+      
+      // Map based on the enum in your backend model
+      if (frontendCategory === "template") {
+        backendCategory = "template";
+      } else if (frontendCategory === "generated") {
+        backendCategory = "generated";
+      } else if (frontendCategory === "image") {
+        backendCategory = "image";
+      } else if (frontendCategory === "uploaded") {
+        // Check file type to determine more specific category
+        if (file.type.startsWith('image/')) {
+          backendCategory = "image";
+        } else if (file.type.includes('spreadsheet') || file.name.match(/\.(xls|xlsx|csv)$/i)) {
+          backendCategory = "spreadsheet";
+        } else if (file.type.includes('presentation') || file.name.match(/\.(ppt|pptx)$/i)) {
+          backendCategory = "presentation";
+        } else if (file.type.includes('pdf') || file.type.includes('document') || file.name.match(/\.(pdf|doc|docx|txt)$/i)) {
+          backendCategory = "document";
+        } else {
+          backendCategory = "other";
+        }
+      } else {
+        backendCategory = frontendCategory;
+      }
+
       console.log("📤 Starting upload process...", {
         fileName: file.name,
         fileSize: file.size,
         documentName: documentName,
         folder: folder,
-        category: category,
+        frontendCategory: frontendCategory,
+        backendCategory: backendCategory,
         description: description
       });
 
@@ -409,7 +481,7 @@ const AllDocumentsSection = () => {
         file,
         folder,
         description || undefined,
-        category
+        backendCategory // Send the mapped category
       );
 
       console.log("📤 Upload result:", uploadResult);
@@ -630,6 +702,7 @@ const AllDocumentsSection = () => {
     { id: "uploaded", label: "Uploaded", count: documents.filter(d => d.category === "uploaded").length, color: "from-green-500 to-emerald-500" },
     { id: "template", label: "Templates", count: documents.filter(d => d.category === "template").length, color: "from-purple-500 to-violet-500" },
     { id: "generated", label: "Generated", count: documents.filter(d => d.category === "generated").length, color: "from-orange-500 to-amber-500" },
+    { id: "image", label: "Images", count: documents.filter(d => d.category === "image").length, color: "from-pink-500 to-rose-500" },
   ];
 
   return (
@@ -849,7 +922,7 @@ const AllDocumentsSection = () => {
               exit={{ opacity: 0, height: 0 }}
               className="mt-3 md:mt-6 overflow-hidden"
             >
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 pt-3 md:pt-6 border-t border-white/10 dark:border-gray-700/30">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3 pt-3 md:pt-6 border-t border-white/10 dark:border-gray-700/30">
                 {categories.map((category) => (
                   <Button
                     key={category.id}
@@ -929,12 +1002,14 @@ const AllDocumentsSection = () => {
                             </div>
                           </div>
                           {!searchQuery && (
-                            <DialogTrigger asChild>
-                              <Button size="sm" className="mt-1 md:mt-2 gap-1 md:gap-2 text-xs md:text-sm bg-gradient-to-r from-primary to-purple-500 h-7 md:h-10">
-                                <Upload className="h-3 w-3 md:h-4 md:w-4" />
-                                Upload Document
-                              </Button>
-                            </DialogTrigger>
+                            <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+                              <DialogTrigger asChild>
+                                <Button size="sm" className="mt-1 md:mt-2 gap-1 md:gap-2 text-xs md:text-sm bg-gradient-to-r from-primary to-purple-500 h-7 md:h-10">
+                                  <Upload className="h-3 w-3 md:h-4 md:w-4" />
+                                  Upload Document
+                                </Button>
+                              </DialogTrigger>
+                            </Dialog>
                           )}
                         </div>
                       </TableCell>
@@ -977,6 +1052,7 @@ const AllDocumentsSection = () => {
                             <Badge className={`gap-1 md:gap-2 px-1.5 md:px-3 py-0.5 md:py-1.5 text-[8px] md:text-xs ${
                               doc.category === 'template' ? 'bg-gradient-to-r from-purple-500 to-violet-500' :
                               doc.category === 'generated' ? 'bg-gradient-to-r from-orange-500 to-amber-500' :
+                              doc.category === 'image' ? 'bg-gradient-to-r from-pink-500 to-rose-500' :
                               'bg-gradient-to-r from-green-500 to-emerald-500'
                             }`}>
                               {doc.category.charAt(0).toUpperCase() + doc.category.slice(1)}
@@ -1073,6 +1149,7 @@ const AllDocumentsSection = () => {
                   <Badge className={`text-[8px] md:text-xs px-1.5 md:px-3 py-0.5 md:py-1.5 ${
                     doc.category === 'template' ? 'bg-gradient-to-r from-purple-500 to-violet-500' :
                     doc.category === 'generated' ? 'bg-gradient-to-r from-orange-500 to-amber-500' :
+                    doc.category === 'image' ? 'bg-gradient-to-r from-pink-500 to-rose-500' :
                     'bg-gradient-to-r from-green-500 to-emerald-500'
                   }`}>
                     {doc.category}

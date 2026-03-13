@@ -465,9 +465,10 @@ const calculateSiteAttendanceData = async (site: Site, date: string): Promise<Si
   const leave = employees.filter(emp => emp.status === 'leave').length;
   const absent = employees.filter(emp => emp.status === 'absent').length;
   
-  const totalPresent = present + weeklyOff;
+  // FIXED: Don't add weeklyOff to present count
+  const totalPresent = present; // Changed from present + weeklyOff
   const totalRequired = employees.length;
-  const shortage = totalRequired - totalPresent;
+  const shortage = totalRequired - (totalPresent + weeklyOff + leave); // FIXED: Calculate shortage correctly
   const attendanceRate = totalRequired > 0 ? Math.round((totalPresent / totalRequired) * 100) : 0;
   
   return {
@@ -1924,7 +1925,7 @@ const ManagerAttendance = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-green-600">{overallTotals.totalPresent}</div>
-                  <p className="text-xs text-muted-foreground">Including weekly off</p>
+                  <p className="text-xs text-muted-foreground">Excluding weekly off</p>
                 </CardContent>
               </Card>
 
