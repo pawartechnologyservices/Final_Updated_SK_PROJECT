@@ -1,0 +1,6 @@
+# Install both dependencies and devDependencies
+npm install
+
+# Or install step by step
+npm install axios bcryptjs cloudinary cors dotenv express express-async-handler jsonwebtoken mongoose multer streamifier xlsx
+npm install --save-dev @types/axios @types/bcryptjs @types/cors @types/express @types/jsonwebtoken @types/mongoose @types/multer @types/node @types/streamifier ts-node typescript
