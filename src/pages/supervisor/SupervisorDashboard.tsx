@@ -61,11 +61,14 @@ import {
   UserCheck as UserCheckIcon,
   UserX as UserXIcon,
   Calendar as CalendarIcon,
-  Filter
+  Filter,
+  Camera
 } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import axios from "axios";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import CameraCapture from "./CameraCapture";
 
 // API URL
 const API_URL = process.env.NODE_ENV === 'development' 
@@ -83,6 +86,8 @@ interface Employee {
   status: "active" | "inactive" | "left";
   email?: string;
   phone?: string;
+  checkInPhoto?: string;
+  checkOutPhoto?: string;
 }
 
 interface AttendanceRecord {
@@ -93,6 +98,8 @@ interface AttendanceRecord {
   status: 'present' | 'absent' | 'half-day' | 'leave' | 'weekly-off';
   checkInTime?: string | null;
   checkOutTime?: string | null;
+  checkInPhoto?: string | null;
+  checkOutPhoto?: string | null;
   breakStartTime?: string | null;
   breakEndTime?: string | null;
   totalHours?: number;
@@ -101,6 +108,32 @@ interface AttendanceRecord {
   isOnBreak?: boolean;
   supervisorId?: string;
   remarks?: string;
+}
+
+interface LeaveRequest {
+  _id: string;
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  site: string;
+  siteId?: string;
+  leaveType: string;
+  fromDate: string;
+  toDate: string;
+  totalDays: number;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  appliedBy: string;
+  appliedFor: string;
+  createdAt: string;
+  updatedAt: string;
+  isSupervisorLeave?: boolean;
+  supervisorId?: string;
+  remarks?: string;
+  approvedBy?: string;
+  rejectedBy?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
 }
 
 interface Site {
@@ -169,6 +202,8 @@ interface AttendanceStatus {
   isOnBreak: boolean;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -186,6 +221,8 @@ interface SupervisorAttendanceRecord {
   date: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -201,6 +238,8 @@ interface ManagerAttendanceData {
   managerName: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -275,14 +314,10 @@ const formatHours = (hours: number): string => {
   return `${hours.toFixed(2)} hrs`;
 };
 
-// Helper function to normalize site names for comparison - MODIFIED FOR EXACT MATCHING
+// Helper function to normalize site names for comparison
 const normalizeSiteName = (siteName: string | null | undefined): string => {
   if (!siteName) return '';
-  // Only trim and convert to lowercase, no special character removal
-  return siteName
-    .toString()
-    .toLowerCase()
-    .trim();
+  return siteName.toString().toLowerCase().trim();
 };
 
 // Helper function to calculate total hours
@@ -299,6 +334,14 @@ const calculateBreakTime = (start: string | null, end: string | null): number =>
   const startTime = new Date(start).getTime();
   const endTime = new Date(end).getTime();
   return (endTime - startTime) / (1000 * 60 * 60);
+};
+
+// Helper to check if a date is within a leave range
+const isDateInLeaveRange = (date: string, fromDate: string, toDate: string): boolean => {
+  const checkDate = new Date(date);
+  const start = new Date(fromDate);
+  const end = new Date(toDate);
+  return checkDate >= start && checkDate <= end;
 };
 
 // Get current supervisor from localStorage
@@ -333,15 +376,15 @@ const getCurrentSupervisor = () => {
 };
 
 // Mock data generators
-const generateMockStats = (): DashboardStats => ({
-  totalEmployees: 24,
-  assignedTasks: 45,
-  completedTasks: 32,
-  pendingReports: 8,
-  attendanceRate: 92,
-  overtimeHours: 12,
-  productivity: 88,
-  pendingRequests: 5
+const generateMockStats = (totalEmployees: number, assignedTasks: number, completedTasks: number): DashboardStats => ({
+  totalEmployees: totalEmployees,
+  assignedTasks: assignedTasks,
+  completedTasks: completedTasks,
+  pendingReports: 0,
+  attendanceRate: 0,
+  overtimeHours: 0,
+  productivity: 0,
+  pendingRequests: 0
 });
 
 const generateMockActivities = (): Activity[] => [
@@ -434,6 +477,16 @@ const SupervisorDashboard = () => {
   const { onMenuClick } = useOutletContext<OutletContext>();
   const navigate = useNavigate();
   
+  // Camera states
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraAction, setCameraAction] = useState<'checkin' | 'checkout' | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  
+  // Photo modal for viewing
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
+  
   // State for data
   const [stats, setStats] = useState<DashboardStats>({
     totalEmployees: 0,
@@ -466,6 +519,8 @@ const SupervisorDashboard = () => {
     isOnBreak: false,
     checkInTime: null,
     checkOutTime: null,
+    checkInPhoto: null,
+    checkOutPhoto: null,
     breakStartTime: null,
     breakEndTime: null,
     totalHours: 0,
@@ -493,6 +548,16 @@ const SupervisorDashboard = () => {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [siteEmployeeCounts, setSiteEmployeeCounts] = useState<SiteEmployeeCount[]>([]);
   
+  // Leave requests state
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [todayLeaveCount, setTodayLeaveCount] = useState(0);
+  const [loadingLeaves, setLoadingLeaves] = useState(false);
+  
+  // Task tracking state
+  const [assignedTasksCount, setAssignedTasksCount] = useState(0);
+  const [completedTasksCount, setCompletedTasksCount] = useState(0);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  
   // Loading states for data fetching
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
@@ -511,30 +576,184 @@ const SupervisorDashboard = () => {
   // Date selection
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
 
+  // Handle view photo
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhotoUrl(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    } else {
+      toast.error('No photo available');
+    }
+  };
+
+  // Handle photo capture for supervisor
+  const handlePhotoCapture = async (photoFile: File) => {
+    if (!cameraAction || !currentSupervisor.id) return;
+    
+    setUploadingPhoto(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('photo', photoFile);
+      formData.append('employeeId', currentSupervisor.id);
+      formData.append('employeeName', currentSupervisor.name);
+      
+      if (currentSupervisor.supervisorId) {
+        formData.append('supervisorId', currentSupervisor.supervisorId);
+      }
+      
+      const endpoint = cameraAction === 'checkin' 
+        ? `${API_URL}/attendance/checkin-with-photo`
+        : `${API_URL}/attendance/checkout-with-photo`;
+      
+      const response = await axios.post(endpoint, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      const data = response.data;
+      
+      if (data.success) {
+        toast.success(`Successfully ${cameraAction === 'checkin' ? 'checked in' : 'checked out'} with photo!`);
+        
+        if (cameraAction === 'checkin') {
+          const newAttendance = {
+            ...attendance,
+            isCheckedIn: true,
+            checkInTime: data.data?.checkInTime || new Date().toISOString(),
+            checkInPhoto: data.data?.checkInPhoto,
+            lastCheckInDate: new Date().toDateString(),
+            hasCheckedInToday: true,
+            hasCheckedOutToday: false
+          };
+          setAttendance(newAttendance);
+          localStorage.setItem(`supervisorAttendance_${currentSupervisor.id}`, JSON.stringify(newAttendance));
+        } else {
+          const newAttendance = {
+            ...attendance,
+            isCheckedIn: false,
+            isOnBreak: false,
+            checkOutTime: data.data?.checkOutTime || new Date().toISOString(),
+            checkOutPhoto: data.data?.checkOutPhoto,
+            totalHours: data.data?.totalHours || 0,
+            hasCheckedOutToday: true
+          };
+          setAttendance(newAttendance);
+          localStorage.setItem(`supervisorAttendance_${currentSupervisor.id}`, JSON.stringify(newAttendance));
+        }
+        
+        addActivity(cameraAction === 'checkin' ? 'checkin' : 'checkout', 
+          `${cameraAction === 'checkin' ? 'Checked in' : 'Checked out'} with photo verification at ${formatTimeForDisplay(new Date().toISOString())}`);
+        
+        setCameraOpen(false);
+        setCameraAction(null);
+        
+        // Refresh data
+        loadSupervisorAttendanceRecords();
+        loadAttendanceStatus();
+      } else {
+        toast.error(data.message || `Error ${cameraAction === 'checkin' ? 'checking in' : 'checking out'}`);
+      }
+    } catch (error: any) {
+      console.error('Photo attendance error:', error);
+      toast.error(`Failed to ${cameraAction === 'checkin' ? 'check in' : 'check out'}: ${error.message}`);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  // Handle check-in with camera
+  const handleCheckIn = () => {
+    if (attendance.hasCheckedInToday && !attendance.isCheckedIn) {
+      toast.error("You have already checked in today. Only one check-in allowed per day.");
+      return;
+    }
+
+    if (attendance.isCheckedIn) {
+      toast.error("You are already checked in!");
+      return;
+    }
+    
+    setCameraAction('checkin');
+    setCameraOpen(true);
+  };
+
+  // Handle check-out with camera
+  const handleCheckOut = () => {
+    if (attendance.hasCheckedOutToday) {
+      toast.error("You have already checked out today.");
+      return;
+    }
+
+    if (!attendance.isCheckedIn && !attendance.hasCheckedInToday) {
+      toast.error("You need to check in first!");
+      return;
+    }
+
+    if (!attendance.isCheckedIn && attendance.hasCheckedInToday) {
+      toast.warning("You are not currently checked in, but you checked in earlier today.", {
+        action: {
+          label: "Force Check Out",
+          onClick: () => forceCheckOut()
+        }
+      });
+      return;
+    }
+    
+    setCameraAction('checkout');
+    setCameraOpen(true);
+  };
+
+  // Force check out without photo
+  const forceCheckOut = async () => {
+    try {
+      console.log('🔄 Force checking out for supervisor:', currentSupervisor.id);
+      
+      const now = new Date().toISOString();
+      const totalHours = calculateTotalHours(attendance.checkInTime, now);
+      
+      const newAttendance = {
+        ...attendance,
+        isCheckedIn: false,
+        isOnBreak: false,
+        checkOutTime: now,
+        totalHours: totalHours,
+        hasCheckedOutToday: true
+      };
+      
+      setAttendance(newAttendance);
+      localStorage.setItem(`supervisorAttendance_${currentSupervisor.id}`, JSON.stringify(newAttendance));
+      addActivity('checkout', `Force checked out at ${formatTimeForDisplay(now)} - Total: ${totalHours.toFixed(2)}h`);
+      
+      toast.success(`✅ Force checked out successfully! Total hours: ${totalHours.toFixed(2)}`);
+      
+    } catch (error) {
+      console.error('Force check-out error:', error);
+      toast.error("Error force checking out");
+    }
+  };
+
   // Check backend connection
   const checkBackendConnection = async () => {
     try {
       setIsCheckingConnection(true);
       console.log('🔄 Checking backend connection at:', `${API_URL}`);
       
-      // Check if we can connect to the server by making a request to employees endpoint
-      // This endpoint definitely exists in your backend
       const response = await axios.get(`${API_URL}/employees?limit=1`, {
         timeout: 5000,
-        validateStatus: (status) => status < 500 // Accept any status less than 500
+        validateStatus: (status) => status < 500
       });
       
-      // If we get any response (even 404, 401, 403, etc.), the server is running
       console.log(`✅ Backend connected (status: ${response.status})`);
       setIsBackendConnected(true);
       
     } catch (error: any) {
       if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
-        // Network error means server is not reachable
         console.error('❌ Backend connection error - server not reachable:', error);
         setIsBackendConnected(false);
       } else if (error.response) {
-        // We got a response from the server (even if it's an error), so server is running
         console.log(`✅ Backend is running but returned status ${error.response.status}`);
         setIsBackendConnected(true);
       } else {
@@ -546,7 +765,118 @@ const SupervisorDashboard = () => {
     }
   };
 
-  // Fetch tasks where this specific supervisor is assigned
+  // Fetch leave requests and count today's leaves
+  const fetchTodayLeaveCount = useCallback(async () => {
+    if (!currentSupervisor) return 0;
+    
+    try {
+      setLoadingLeaves(true);
+      console.log("🔍 Fetching leave requests for today:", selectedDate);
+      
+      const response = await axios.get(`${API_URL}/leaves`, {
+        params: { limit: 1000 }
+      });
+      
+      let allLeaves: LeaveRequest[] = [];
+      if (response.data) {
+        if (Array.isArray(response.data)) {
+          allLeaves = response.data;
+        } else if (response.data.success && Array.isArray(response.data.data)) {
+          allLeaves = response.data.data;
+        } else if (response.data.leaves && Array.isArray(response.data.leaves)) {
+          allLeaves = response.data.leaves;
+        }
+      }
+      
+      console.log(`📊 Total leaves from API: ${allLeaves.length}`);
+      
+      const today = selectedDate;
+      const approvedLeavesToday = allLeaves.filter(leave => {
+        if (leave.status !== 'approved') return false;
+        return isDateInLeaveRange(today, leave.fromDate, leave.toDate);
+      });
+      
+      console.log(`✅ Found ${approvedLeavesToday.length} employees on leave today`);
+      
+      setLeaveRequests(allLeaves);
+      setTodayLeaveCount(approvedLeavesToday.length);
+      
+      return approvedLeavesToday.length;
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching leave requests:', error);
+      return 0;
+    } finally {
+      setLoadingLeaves(false);
+    }
+  }, [currentSupervisor, selectedDate]);
+
+  // Fetch tasks assigned to this supervisor
+  const fetchAssignedTasks = useCallback(async () => {
+    if (!currentSupervisor) return { assigned: 0, completed: 0 };
+    
+    try {
+      setLoadingTasks(true);
+      const supervisorId = currentSupervisor.id;
+      const supervisorName = currentSupervisor.name;
+      
+      console.log("🔍 Fetching tasks assigned to supervisor:", {
+        id: supervisorId,
+        name: supervisorName
+      });
+      
+      const response = await axios.get(`${API_URL}/assigntasks`, {
+        params: { limit: 1000 }
+      });
+      
+      let allTasks: any[] = [];
+      if (response.data) {
+        if (Array.isArray(response.data)) {
+          allTasks = response.data;
+        } else if (response.data.success && Array.isArray(response.data.data)) {
+          allTasks = response.data.data;
+        } else if (response.data.tasks && Array.isArray(response.data.tasks)) {
+          allTasks = response.data.tasks;
+        }
+      }
+      
+      console.log(`📊 Total tasks from assigntasks: ${allTasks.length}`);
+      
+      const myTasks = allTasks.filter(task => {
+        if (!task.assignedSupervisors || !Array.isArray(task.assignedSupervisors)) {
+          return false;
+        }
+        
+        return task.assignedSupervisors.some(supervisor => {
+          const supervisorUserId = supervisor.userId;
+          const matchById = String(supervisorUserId) === String(supervisorId);
+          const matchByName = supervisor.name?.toLowerCase().trim() === supervisorName?.toLowerCase().trim();
+          return matchById || matchByName;
+        });
+      });
+      
+      const completedCount = myTasks.filter(task => {
+        const myInfo = task.assignedSupervisors?.find((supervisor: any) => {
+          const matchById = String(supervisor.userId) === String(supervisorId);
+          const matchByName = supervisor.name?.toLowerCase().trim() === supervisorName?.toLowerCase().trim();
+          return matchById || matchByName;
+        });
+        return myInfo?.status === 'completed' || task.status === 'completed';
+      }).length;
+      
+      console.log(`✅ Found ${myTasks.length} tasks assigned to this supervisor (${completedCount} completed)`);
+      
+      return { assigned: myTasks.length, completed: completedCount };
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching assigned tasks:', error);
+      return { assigned: 0, completed: 0 };
+    } finally {
+      setLoadingTasks(false);
+    }
+  }, [currentSupervisor]);
+
+  // Fetch tasks where this specific supervisor is assigned (for site filtering)
   const fetchSupervisorSitesFromTasks = useCallback(async () => {
     if (!currentSupervisor) return { siteNames: [], siteIds: [] };
     
@@ -651,22 +981,18 @@ const SupervisorDashboard = () => {
         status: site.status || "active"
       }));
       
-      // Filter sites based on task assignments - EXACT MATCH ONLY
       let supervisorSiteList: Site[] = [];
       
       if (taskSiteNames.length > 0) {
         supervisorSiteList = transformedSites.filter(site => {
-          // Check exact match with site name
           const exactNameMatch = taskSiteNames.some(taskSiteName => 
             site.name === taskSiteName
           );
           
-          // Check exact match with normalized names
           const exactNormalizedMatch = taskSiteNames.some(taskSiteName => 
             normalizeSiteName(site.name) === normalizeSiteName(taskSiteName)
           );
           
-          // Check ID match
           const idMatch = taskSiteIds.includes(site._id);
           
           return exactNameMatch || exactNormalizedMatch || idMatch;
@@ -715,6 +1041,16 @@ const SupervisorDashboard = () => {
         setEmployees([]);
         setSiteEmployeeCounts([]);
         
+        setSummary(prev => ({
+          ...prev,
+          totalEmployees: 0
+        }));
+        
+        setStats(prev => ({
+          ...prev,
+          totalEmployees: 0
+        }));
+        
         toast.warning("You have no tasks assigned to any sites. Please contact your administrator.");
         setLoadingEmployees(false);
         return;
@@ -741,34 +1077,29 @@ const SupervisorDashboard = () => {
         console.log(`📊 Total employees from API: ${allEmployees.length}`);
         console.log("📍 Supervisor's task-assigned sites:", supervisorSiteNameList);
         
-        // IMPORTANT FIX: Filter employees by supervisor's task-assigned sites using EXACT MATCH ONLY
-        // No partial matches, no "includes" matching
         fetchedEmployees = allEmployees.filter((emp: Employee) => {
           const employeeSite = emp.siteName || '';
           
-          // EXACT MATCH ONLY - compare the full site name
           const exactMatch = supervisorSiteNameList.some(siteName => 
             siteName === employeeSite
           );
           
-          // Normalized exact match (case insensitive, trimmed)
           const normalizedExactMatch = supervisorSiteNameList.some(siteName => 
             normalizeSiteName(siteName) === normalizeSiteName(employeeSite)
           );
           
-          // Only match if it's an exact match - NO PARTIAL MATCHES
           const matches = exactMatch || normalizedExactMatch;
           
           if (matches) {
-            console.log(`✅ Employee ${emp.name} (${emp.employeeId}) matches site: "${employeeSite}" exactly with supervisor site: "${supervisorSiteNameList.find(s => normalizeSiteName(s) === normalizeSiteName(employeeSite))}"`);
+            console.log(`✅ Employee ${emp.name} (${emp.employeeId}) matches site: "${employeeSite}"`);
           } else {
-            console.log(`❌ Employee ${emp.name} site: "${employeeSite}" does NOT exactly match any supervisor site: [${supervisorSiteNameList.join(', ')}]`);
+            console.log(`❌ Employee ${emp.name} site: "${employeeSite}" does NOT match any supervisor site`);
           }
           
           return matches;
         });
         
-        console.log(`✅ Filtered ${fetchedEmployees.length} employees for supervisor's task-assigned sites (exact matches only)`);
+        console.log(`✅ Filtered ${fetchedEmployees.length} employees for supervisor's task-assigned sites`);
         
         const siteCountMap = new Map<string, number>();
         fetchedEmployees.forEach(emp => {
@@ -782,6 +1113,16 @@ const SupervisorDashboard = () => {
         }));
         
         setSiteEmployeeCounts(siteCounts);
+        
+        setSummary(prev => ({
+          ...prev,
+          totalEmployees: fetchedEmployees.length
+        }));
+        
+        setStats(prev => ({
+          ...prev,
+          totalEmployees: fetchedEmployees.length
+        }));
         
         if (fetchedEmployees.length > 0) {
           toast.success(`Loaded ${fetchedEmployees.length} employees for your task-assigned sites`);
@@ -803,12 +1144,22 @@ const SupervisorDashboard = () => {
       
       setEmployees([]);
       setSiteEmployeeCounts([]);
+      
+      setSummary(prev => ({
+        ...prev,
+        totalEmployees: 0
+      }));
+      
+      setStats(prev => ({
+        ...prev,
+        totalEmployees: 0
+      }));
     } finally {
       setLoadingEmployees(false);
     }
   }, [currentSupervisor, supervisorSites, supervisorSiteNames, fetchAllSites]);
 
-  // Load attendance records for selected date - FIXED ABSENT COUNT LOGIC
+  // Load attendance records for selected date
   const loadAttendanceRecords = async (date: string) => {
     try {
       setLoadingAttendance(true);
@@ -817,14 +1168,13 @@ const SupervisorDashboard = () => {
       if (employees.length === 0) {
         console.log("No employees to fetch attendance for");
         setAttendanceRecords([]);
-        setSummary({
-          totalEmployees: 0,
+        setSummary(prev => ({
+          ...prev,
           presentCount: 0,
           absentCount: 0,
           weeklyOffCount: 0,
-          leaveCount: 0,
           halfDayCount: 0
-        });
+        }));
         setLoadingAttendance(false);
         return;
       }
@@ -850,46 +1200,39 @@ const SupervisorDashboard = () => {
         
         setAttendanceRecords(filteredRecords);
         
-        // Calculate counts
         const presentCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'present').length;
         const weeklyOffCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'weekly-off').length;
-        const leaveCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'leave').length;
         const halfDayCount = filteredRecords.filter((r: AttendanceRecord) => r.status === 'half-day').length;
         
-        // Employees with status 'absent' in records
         const absentFromRecords = filteredRecords.filter((r: AttendanceRecord) => r.status === 'absent').length;
         
-        // Employees with NO attendance record at all
         const employeesWithRecords = new Set(filteredRecords.map(r => r.employeeId));
         const employeesWithoutRecords = employees.filter(emp => !employeesWithRecords.has(emp._id)).length;
         
-        // Total absent = absent from records + employees without records
-        // Employees on weekly off are NOT counted as absent
         const totalAbsentCount = absentFromRecords + employeesWithoutRecords;
         
-        console.log(`📊 Summary - Present: ${presentCount}, Weekly Off: ${weeklyOffCount}, Leave: ${leaveCount}, Half Day: ${halfDayCount}, Absent: ${totalAbsentCount} (${absentFromRecords} from records + ${employeesWithoutRecords} without records)`);
+        console.log(`📊 Summary - Total: ${employees.length}, Present: ${presentCount}, Weekly Off: ${weeklyOffCount}, Half Day: ${halfDayCount}, Absent: ${totalAbsentCount}`);
         
-        setSummary({
+        setSummary(prev => ({
           totalEmployees: employees.length,
           presentCount,
           absentCount: totalAbsentCount,
           weeklyOffCount,
-          leaveCount,
+          leaveCount: todayLeaveCount,
           halfDayCount
-        });
+        }));
       } else {
         console.error('Failed to load attendance:', response.data?.message);
         setAttendanceRecords([]);
         
-        // If no attendance records at all, all employees are absent
-        setSummary({
+        setSummary(prev => ({
           totalEmployees: employees.length,
           presentCount: 0,
           absentCount: employees.length,
           weeklyOffCount: 0,
-          leaveCount: 0,
+          leaveCount: todayLeaveCount,
           halfDayCount: 0
-        });
+        }));
       }
     } catch (error: any) {
       console.error('Error loading attendance:', error);
@@ -900,15 +1243,14 @@ const SupervisorDashboard = () => {
       
       setAttendanceRecords([]);
       
-      // On error, all employees are considered absent
-      setSummary({
+      setSummary(prev => ({
         totalEmployees: employees.length,
         presentCount: 0,
         absentCount: employees.length,
         weeklyOffCount: 0,
-        leaveCount: 0,
+        leaveCount: todayLeaveCount,
         halfDayCount: 0
-      });
+      }));
     } finally {
       setLoadingAttendance(false);
     }
@@ -1009,6 +1351,8 @@ const SupervisorDashboard = () => {
             isOnBreak: apiAttendance.isOnBreak || false,
             checkInTime: apiAttendance.checkInTime || null,
             checkOutTime: apiAttendance.checkOutTime || null,
+            checkInPhoto: apiAttendance.checkInPhoto || null,
+            checkOutPhoto: apiAttendance.checkOutPhoto || null,
             breakStartTime: apiAttendance.breakStartTime || null,
             breakEndTime: apiAttendance.breakEndTime || null,
             totalHours: Number(apiAttendance.totalHours) || 0,
@@ -1110,6 +1454,8 @@ const SupervisorDashboard = () => {
               date: recordDate,
               checkInTime: record.checkInTime ? formatTimeForDisplay(record.checkInTime) : "-",
               checkOutTime: record.checkOutTime ? formatTimeForDisplay(record.checkOutTime) : "-",
+              checkInPhoto: record.checkInPhoto || null,
+              checkOutPhoto: record.checkOutPhoto || null,
               breakStartTime: record.breakStartTime ? formatTimeForDisplay(record.breakStartTime) : "-",
               breakEndTime: record.breakEndTime ? formatTimeForDisplay(record.breakEndTime) : "-",
               totalHours: Number(record.totalHours) || 0,
@@ -1137,7 +1483,7 @@ const SupervisorDashboard = () => {
     }
   };
 
-  // Create sample attendance records
+  // Create sample attendance records with mock photos
   const createSampleAttendanceRecords = () => {
     const today = new Date().toISOString().split('T')[0];
     const sampleRecords: SupervisorAttendanceRecord[] = [
@@ -1149,6 +1495,8 @@ const SupervisorDashboard = () => {
         date: today,
         checkInTime: attendance.checkInTime ? formatTimeForDisplay(attendance.checkInTime) : "-",
         checkOutTime: attendance.checkOutTime ? formatTimeForDisplay(attendance.checkOutTime) : "-",
+        checkInPhoto: attendance.checkInPhoto || null,
+        checkOutPhoto: attendance.checkOutPhoto || null,
         breakStartTime: attendance.breakStartTime,
         breakEndTime: attendance.breakEndTime,
         totalHours: attendance.totalHours || 0,
@@ -1167,6 +1515,8 @@ const SupervisorDashboard = () => {
         date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
         checkInTime: "08:45 AM",
         checkOutTime: "05:15 PM",
+        checkInPhoto: null,
+        checkOutPhoto: null,
         breakStartTime: null,
         breakEndTime: null,
         totalHours: 8.5,
@@ -1183,6 +1533,8 @@ const SupervisorDashboard = () => {
         date: new Date(Date.now() - 2 * 86400000).toISOString().split('T')[0],
         checkInTime: "09:00 AM",
         checkOutTime: "04:30 PM",
+        checkInPhoto: null,
+        checkOutPhoto: null,
         breakStartTime: null,
         breakEndTime: null,
         totalHours: 7.5,
@@ -1199,6 +1551,8 @@ const SupervisorDashboard = () => {
         date: new Date(Date.now() - 3 * 86400000).toISOString().split('T')[0],
         checkInTime: "-",
         checkOutTime: "-",
+        checkInPhoto: null,
+        checkOutPhoto: null,
         breakStartTime: null,
         breakEndTime: null,
         totalHours: 0,
@@ -1224,287 +1578,9 @@ const SupervisorDashboard = () => {
     localStorage.setItem(`supervisorAttendance_${currentSupervisor.id}`, JSON.stringify(sanitizedAttendance));
   };
 
-  // Handle check-in
-  const handleCheckIn = async () => {
-    try {
-      // FIX: Check if user has already checked in today - disable check-in button completely
-      if (attendance.hasCheckedInToday) {
-        toast.error("You have already checked in today. Only one check-in allowed per day.");
-        return;
-      }
-
-      if (attendance.isCheckedIn) {
-        toast.error("You are already checked in!");
-        return;
-      }
-
-      console.log('🔄 Attempting check-in for supervisor:', currentSupervisor.id);
-      
-      setIsAttendanceLoading(true);
-      
-      const payload = {
-        employeeId: currentSupervisor.id,
-        employeeName: currentSupervisor.name,
-        supervisorId: currentSupervisor.supervisorId,
-      };
-      
-      const response = await fetch(`${API_URL}/attendance/checkin`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      
-      if (response.ok && data.success) {
-        const now = new Date().toISOString();
-        const newAttendance = {
-          ...attendance,
-          isCheckedIn: true,
-          isOnBreak: false,
-          checkInTime: now,
-          checkOutTime: null,
-          lastCheckInDate: new Date().toDateString(),
-          hasCheckedInToday: true,
-          hasCheckedOutToday: false
-        };
-        
-        saveAttendanceStatus(newAttendance);
-        addActivity('checkin', `Checked in at ${formatTimeForDisplay(now)}`);
-        loadSupervisorAttendanceRecords();
-        
-        toast.success("✅ Successfully checked in!");
-      } else {
-        throw new Error(data.message || 'Failed to check in');
-      }
-    } catch (error: any) {
-      console.error('❌ Check-in error:', error);
-      
-      if (error.message.includes('Already checked in') || error.message.includes('already checked in')) {
-        toast.error("❌ Already Checked In Today");
-        
-        const newAttendance = {
-          ...attendance,
-          hasCheckedInToday: true,
-          isCheckedIn: true
-        };
-        saveAttendanceStatus(newAttendance);
-      } else {
-        toast.error(`❌ Check-in failed: ${error.message}`);
-        
-        const now = new Date().toISOString();
-        const newAttendance = {
-          ...attendance,
-          isCheckedIn: true,
-          checkInTime: now,
-          checkOutTime: null,
-          hasCheckedInToday: true,
-          hasCheckedOutToday: false
-        };
-        saveAttendanceStatus(newAttendance);
-        addActivity('checkin', `Checked in at ${formatTimeForDisplay(now)} (Offline)`);
-      }
-    } finally {
-      setIsAttendanceLoading(false);
-    }
-  };
-
-  // Handle check-out
-  const handleCheckOut = async () => {
-    try {
-      if (attendance.hasCheckedOutToday) {
-        toast.error("You have already checked out today.");
-        return;
-      }
-
-      if (!attendance.isCheckedIn && !attendance.hasCheckedInToday) {
-        toast.error("You need to check in first!");
-        return;
-      }
-
-      if (!attendance.isCheckedIn && attendance.hasCheckedInToday) {
-        toast.warning("You are not currently checked in, but you checked in earlier today.", {
-          action: {
-            label: "Force Check Out",
-            onClick: () => forceCheckOut()
-          }
-        });
-        return;
-      }
-
-      console.log('🔄 Attempting check-out for supervisor:', currentSupervisor.id);
-      
-      setIsAttendanceLoading(true);
-      
-      const payload = {
-        employeeId: currentSupervisor.id,
-      };
-      
-      const response = await fetch(`${API_URL}/attendance/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      
-      if (response.ok && data.success) {
-        const now = new Date().toISOString();
-        const totalHours = calculateTotalHours(attendance.checkInTime, now);
-        
-        const newAttendance = {
-          ...attendance,
-          isCheckedIn: false,
-          isOnBreak: false,
-          checkOutTime: now,
-          totalHours: totalHours,
-          hasCheckedOutToday: true
-        };
-        
-        saveAttendanceStatus(newAttendance);
-        addActivity('checkout', `Checked out at ${formatTimeForDisplay(now)} - Total: ${totalHours.toFixed(2)}h`);
-        loadSupervisorAttendanceRecords();
-        
-        toast.success(`✅ Successfully checked out! Total hours: ${totalHours.toFixed(2)}`);
-      } else {
-        throw new Error(data.message || 'Failed to check out');
-      }
-    } catch (error: any) {
-      console.error('❌ Check-out error:', error);
-      
-      if (error.message.includes('Already checked out') || error.message.includes('already checked out')) {
-        toast.error("❌ Already Checked Out Today");
-        
-        const newAttendance = {
-          ...attendance,
-          hasCheckedOutToday: true,
-          isCheckedIn: false
-        };
-        saveAttendanceStatus(newAttendance);
-      } else {
-        toast.error(`❌ Check-out failed: ${error.message}`);
-        
-        const now = new Date().toISOString();
-        const totalHours = calculateTotalHours(attendance.checkInTime, now);
-        const newAttendance = {
-          ...attendance,
-          isCheckedIn: false,
-          isOnBreak: false,
-          checkOutTime: now,
-          totalHours: totalHours,
-          hasCheckedOutToday: true
-        };
-        saveAttendanceStatus(newAttendance);
-        addActivity('checkout', `Checked out at ${formatTimeForDisplay(now)} - Total: ${totalHours.toFixed(2)}h (Offline)`);
-      }
-    } finally {
-      setIsAttendanceLoading(false);
-    }
-  };
-
-  // Force check out
-  const forceCheckOut = async () => {
-    try {
-      console.log('🔄 Force checking out for supervisor:', currentSupervisor.id);
-      
-      setIsAttendanceLoading(true);
-      
-      const now = new Date().toISOString();
-      const totalHours = calculateTotalHours(attendance.checkInTime, now);
-      
-      const newAttendance = {
-        ...attendance,
-        isCheckedIn: false,
-        isOnBreak: false,
-        checkOutTime: now,
-        totalHours: totalHours,
-        hasCheckedOutToday: true
-      };
-      
-      saveAttendanceStatus(newAttendance);
-      addActivity('checkout', `Force checked out at ${formatTimeForDisplay(now)} - Total: ${totalHours.toFixed(2)}h`);
-      
-      toast.success(`✅ Force checked out successfully! Total hours: ${totalHours.toFixed(2)}`);
-      
-    } catch (error) {
-      console.error('Force check-out error:', error);
-      toast.error("Error force checking out");
-    } finally {
-      setIsAttendanceLoading(false);
-    }
-  };
-
-  // FIXED: Reset attendance - Now only works when it's actually a new day
-  const handleResetAttendance = async () => {
-    try {
-      // Check if it's actually a new day before allowing reset
-      if (!isNewDay()) {
-        toast.error("Cannot reset attendance for the same day. Please wait until tomorrow.");
-        return;
-      }
-
-      console.log('🔄 Resetting attendance for new day...');
-      
-      setIsAttendanceLoading(true);
-      
-      try {
-        const response = await fetch(`${API_URL}/attendance/reset/${currentSupervisor.id}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success) {
-            toast.success("Attendance reset for new day!");
-          }
-        }
-      } catch (resetError) {
-        console.log('Reset API failed, using local reset:', resetError);
-      }
-      
-      // Create new attendance state for the new day
-      const newAttendance = {
-        isCheckedIn: false,
-        isOnBreak: false,
-        checkInTime: null,
-        checkOutTime: null,
-        breakStartTime: null,
-        breakEndTime: null,
-        totalHours: 0,
-        breakTime: 0,
-        lastCheckInDate: new Date().toDateString(), // Update to today's date but with no check-in
-        hasCheckedInToday: false,
-        hasCheckedOutToday: false
-      };
-      
-      saveAttendanceStatus(newAttendance);
-      
-      toast.success("✅ Attendance reset for new day! You can now check in.");
-      
-    } catch (error) {
-      console.error('Reset error:', error);
-      toast.error("Error resetting attendance");
-    } finally {
-      setIsAttendanceLoading(false);
-    }
-  };
-
   // Handle break in
   const handleBreakIn = async () => {
     try {
-      // FIX: Don't allow break if checked out
-      if (attendance.hasCheckedOutToday) {
-        toast.error("You have already checked out today. Cannot start break after check-out.");
-        return;
-      }
-
       if (!attendance.isCheckedIn) {
         toast.error("You need to check in first!");
         return;
@@ -1568,12 +1644,6 @@ const SupervisorDashboard = () => {
   // Handle break out
   const handleBreakOut = async () => {
     try {
-      // FIX: Don't allow break out if checked out
-      if (attendance.hasCheckedOutToday) {
-        toast.error("You have already checked out today. Cannot end break after check-out.");
-        return;
-      }
-
       if (!attendance.isOnBreak) {
         toast.error("You are not on break!");
         return;
@@ -1790,8 +1860,23 @@ const SupervisorDashboard = () => {
         fetchAllSites();
         fetchEmployees();
         loadAttendanceRecords(selectedDate);
+        updateTaskCounts();
+        fetchTodayLeaveCount();
       }
     });
+  };
+
+  // Update task counts from API
+  const updateTaskCounts = async () => {
+    const { assigned, completed } = await fetchAssignedTasks();
+    setAssignedTasksCount(assigned);
+    setCompletedTasksCount(completed);
+    
+    setStats(prev => ({
+      ...prev,
+      assignedTasks: assigned,
+      completedTasks: completed
+    }));
   };
 
   // Handle refresh
@@ -1806,12 +1891,20 @@ const SupervisorDashboard = () => {
     fetchAllSites();
     fetchEmployees();
     loadAttendanceRecords(selectedDate);
+    updateTaskCounts();
+    fetchTodayLeaveCount();
     
     toast.success("Dashboard data refreshed!");
   };
 
   const loadData = async () => {
-    setStats(generateMockStats());
+    const { assigned, completed } = await fetchAssignedTasks();
+    setAssignedTasksCount(assigned);
+    setCompletedTasksCount(completed);
+    
+    await fetchTodayLeaveCount();
+    
+    setStats(generateMockStats(summary.totalEmployees, assigned, completed));
     setActivities(generateMockActivities());
     setTeam(generateMockTeam());
     setTasks(generateMockTasks());
@@ -1834,13 +1927,29 @@ const SupervisorDashboard = () => {
       const resetAttendance = {
         ...attendance,
         hasCheckedInToday: false,
-        hasCheckedOutToday: false,
-        isCheckedIn: false,
-        isOnBreak: false
+        hasCheckedOutToday: false
       };
       saveAttendanceStatus(resetAttendance);
     }
   }, [attendance.lastCheckInDate]);
+
+  // Update stats whenever summary.totalEmployees or task counts or leave count change
+  useEffect(() => {
+    setStats(prev => ({
+      ...prev,
+      totalEmployees: summary.totalEmployees,
+      assignedTasks: assignedTasksCount,
+      completedTasks: completedTasksCount
+    }));
+  }, [summary.totalEmployees, assignedTasksCount, completedTasksCount]);
+
+  // Update summary leave count when todayLeaveCount changes
+  useEffect(() => {
+    setSummary(prev => ({
+      ...prev,
+      leaveCount: todayLeaveCount
+    }));
+  }, [todayLeaveCount]);
 
   // Initialize data
   useEffect(() => {
@@ -1850,10 +1959,12 @@ const SupervisorDashboard = () => {
       await checkBackendConnection();
       await fetchAllSites();
       await fetchEmployees();
+      await fetchTodayLeaveCount();
       await loadAttendanceRecords(selectedDate);
       await loadAttendanceStatus();
       await loadManagerAttendanceData();
       await loadSupervisorAttendanceRecords();
+      await updateTaskCounts();
       await loadData();
       setLoading(false);
     };
@@ -1866,14 +1977,15 @@ const SupervisorDashboard = () => {
     if (employees.length > 0) {
       loadAttendanceRecords(selectedDate);
     } else {
-      setSummary({
+      setSummary(prev => ({
+        ...prev,
         totalEmployees: 0,
         presentCount: 0,
         absentCount: 0,
         weeklyOffCount: 0,
-        leaveCount: 0,
+        leaveCount: todayLeaveCount,
         halfDayCount: 0
-      });
+      }));
     }
   }, [employees, selectedDate]);
 
@@ -1897,40 +2009,6 @@ const SupervisorDashboard = () => {
       />
 
       <div className="p-6 space-y-6">
-        {/* Connection Status Banner */}
-        {/* {!isBackendConnected && (
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-            <div className="flex items-center gap-3">
-              <WifiOff className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
-                  Backend Server Not Connected
-                </p>
-                <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
-                  Showing sample data. To view real attendance records, please connect to the backend server.
-                </p>
-                <div className="mt-2 space-y-1 text-xs">
-                  <code className="bg-yellow-100 dark:bg-yellow-900/30 px-2 py-1 rounded">
-                    cd backend && npm run dev
-                  </code>
-                  <p className="text-yellow-600 dark:text-yellow-400">
-                    Server should be running at: {API_URL}
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRetryConnection}
-                disabled={isCheckingConnection}
-                className="border-yellow-300 text-yellow-700 hover:bg-yellow-100 dark:border-yellow-700 dark:text-yellow-300 dark:hover:bg-yellow-900/30"
-              >
-                {isCheckingConnection ? "Checking..." : "Retry Connection"}
-              </Button>
-            </div>
-          </div>
-        )} */}
-
         {/* Connected Status Banner */}
         {isBackendConnected && (
           <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
@@ -1991,6 +2069,17 @@ const SupervisorDashboard = () => {
                       </p>
                     </div>
                   </div>
+                  {managerAttendance.checkInPhoto && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleViewPhoto(managerAttendance.checkInPhoto, 'checkin')}
+                      className="mt-2 h-6 px-2 text-xs"
+                    >
+                      <Camera className="h-3 w-3 mr-1" />
+                      View Photo
+                    </Button>
+                  )}
                 </div>
 
                 <div className="p-4 bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-700">
@@ -2033,6 +2122,17 @@ const SupervisorDashboard = () => {
                       </p>
                     </div>
                   </div>
+                  {managerAttendance.checkOutPhoto && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleViewPhoto(managerAttendance.checkOutPhoto, 'checkout')}
+                      className="mt-2 h-6 px-2 text-xs"
+                    >
+                      <Camera className="h-3 w-3 mr-1" />
+                      View Check-out Photo
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -2111,7 +2211,7 @@ const SupervisorDashboard = () => {
           </div>
         )}
 
-        {/* Attendance Controls */}
+        {/* Attendance Controls with Camera */}
         <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -2125,7 +2225,7 @@ const SupervisorDashboard = () => {
               )}
             </CardTitle>
             <CardDescription>
-              Manage your work hours and breaks - One check-in/check-out allowed per day
+              Take a photo to verify your check-in and check-out times - One check-in/check-out allowed per day
               {attendance.lastCheckInDate && (
                 <span className="block text-xs mt-1">
                   Last check-in: {attendance.lastCheckInDate}
@@ -2154,18 +2254,6 @@ const SupervisorDashboard = () => {
                   >
                     {isAttendanceLoading ? "Processing..." : "Force Check Out"}
                   </Button>
-                  {/* FIX: Only show reset button if it's actually a new day */}
-                  {isNewDay() && (
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={handleResetAttendance}
-                      disabled={isAttendanceLoading}
-                      className="text-xs"
-                    >
-                      {isAttendanceLoading ? "Processing..." : "Reset for New Day"}
-                    </Button>
-                  )}
                 </div>
               </div>
             )}
@@ -2179,16 +2267,15 @@ const SupervisorDashboard = () => {
                 <p className="text-xs text-green-600 dark:text-green-400 mt-1">
                   You have completed your attendance for today. Check-out allowed only once per day.
                 </p>
-                {/* FIX: Only show reset button if it's actually a new day */}
-                {isNewDay() && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={handleResetAttendance}
-                    disabled={isAttendanceLoading}
-                    className="mt-2 text-xs border-green-300 text-green-700 hover:bg-green-100"
+                {attendance.checkOutPhoto && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleViewPhoto(attendance.checkOutPhoto, 'checkout')}
+                    className="mt-2 h-6 px-2 text-xs"
                   >
-                    {isAttendanceLoading ? "Processing..." : "Reset for New Day"}
+                    <Camera className="h-3 w-3 mr-1" />
+                    View Check-out Photo
                   </Button>
                 )}
               </div>
@@ -2204,17 +2291,16 @@ const SupervisorDashboard = () => {
                   </Badge>
                 </div>
                 <div className="flex gap-2">
-                  {/* FIX: Check-in button disabled when hasCheckedInToday is true */}
                   <Button
                     onClick={handleCheckIn}
-                    disabled={attendance.isCheckedIn || attendance.hasCheckedInToday || isAttendanceLoading || isCheckingStatus}
+                    disabled={attendance.isCheckedIn || (attendance.hasCheckedInToday && !attendance.hasCheckedOutToday) || isAttendanceLoading || isCheckingStatus}
                     className="flex-1 flex items-center gap-2"
-                    variant={(attendance.isCheckedIn || attendance.hasCheckedInToday || isAttendanceLoading || isCheckingStatus) ? "outline" : "default"}
+                    variant={(attendance.isCheckedIn || (attendance.hasCheckedInToday && !attendance.hasCheckedOutToday) || isAttendanceLoading || isCheckingStatus) ? "outline" : "default"}
                   >
-                    <LogIn className="h-4 w-4" />
+                    <Camera className="h-4 w-4" />
                     {isAttendanceLoading ? "Processing..." : 
-                     attendance.hasCheckedInToday ? 'Already Checked In' : 
-                     'Check In'}
+                     attendance.hasCheckedInToday && !attendance.hasCheckedOutToday ? 'Already Checked In' : 
+                     'Check In with Photo'}
                   </Button>
                   <Button
                     onClick={handleCheckOut}
@@ -2222,16 +2308,29 @@ const SupervisorDashboard = () => {
                     className="flex-1 flex items-center gap-2"
                     variant={(!attendance.isCheckedIn && !attendance.hasCheckedInToday) || attendance.hasCheckedOutToday || isAttendanceLoading || isCheckingStatus ? "outline" : "default"}
                   >
-                    <LogOut className="h-4 w-4" />
+                    <Camera className="h-4 w-4" />
                     {isAttendanceLoading ? "Processing..." : 
                      attendance.hasCheckedOutToday ? 'Already Checked Out' : 
-                     'Check Out'}
+                     'Check Out with Photo'}
                   </Button>
                 </div>
                 {attendance.checkInTime && (
-                  <p className="text-xs text-gray-500">
-                    Checked in: {formatTimeForDisplay(attendance.checkInTime)}
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-gray-500">
+                      Checked in: {formatTimeForDisplay(attendance.checkInTime)}
+                    </p>
+                    {attendance.checkInPhoto && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleViewPhoto(attendance.checkInPhoto, 'checkin')}
+                        className="h-6 px-2 text-xs"
+                      >
+                        <Camera className="h-3 w-3 mr-1" />
+                        View Photo
+                      </Button>
+                    )}
+                  </div>
                 )}
                 {attendance.checkOutTime && (
                   <p className="text-xs text-green-500">
@@ -2240,7 +2339,7 @@ const SupervisorDashboard = () => {
                 )}
               </div>
 
-              {/* Break In/Out - FIX: Disable both buttons after check-out */}
+              {/* Break In/Out */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">Break Status</span>
@@ -2251,37 +2350,26 @@ const SupervisorDashboard = () => {
                 <div className="flex gap-2">
                   <Button
                     onClick={handleBreakIn}
-                    disabled={!attendance.isCheckedIn || attendance.isOnBreak || isAttendanceLoading || isCheckingStatus || attendance.hasCheckedOutToday}
+                    disabled={!attendance.isCheckedIn || attendance.isOnBreak || isAttendanceLoading || isCheckingStatus}
                     className="flex-1 flex items-center gap-2"
-                    variant={(!attendance.isCheckedIn || attendance.isOnBreak || isAttendanceLoading || isCheckingStatus || attendance.hasCheckedOutToday) ? "outline" : "default"}
-                    title={attendance.hasCheckedOutToday ? "Cannot start break after check-out" : ""}
+                    variant={(!attendance.isCheckedIn || attendance.isOnBreak || isAttendanceLoading || isCheckingStatus) ? "outline" : "default"}
                   >
                     <Coffee className="h-4 w-4" />
-                    {isAttendanceLoading ? "Processing..." : 
-                     attendance.hasCheckedOutToday ? 'Checked Out' :
-                     'Break In'}
+                    {isAttendanceLoading ? "Processing..." : "Break In"}
                   </Button>
                   <Button
                     onClick={handleBreakOut}
-                    disabled={!attendance.isOnBreak || isAttendanceLoading || isCheckingStatus || attendance.hasCheckedOutToday}
+                    disabled={!attendance.isOnBreak || isAttendanceLoading || isCheckingStatus}
                     className="flex-1 flex items-center gap-2"
-                    variant={(!attendance.isOnBreak || isAttendanceLoading || isCheckingStatus || attendance.hasCheckedOutToday) ? "outline" : "default"}
-                    title={attendance.hasCheckedOutToday ? "Cannot end break after check-out" : ""}
+                    variant={!attendance.isOnBreak || isAttendanceLoading || isCheckingStatus ? "outline" : "default"}
                   >
                     <Timer className="h-4 w-4" />
-                    {isAttendanceLoading ? "Processing..." : 
-                     attendance.hasCheckedOutToday ? 'Checked Out' :
-                     'Break Out'}
+                    {isAttendanceLoading ? "Processing..." : "Break Out"}
                   </Button>
                 </div>
                 {attendance.breakStartTime && attendance.isOnBreak && (
                   <p className="text-xs text-gray-500">
                     Break started: {formatTimeForDisplay(attendance.breakStartTime)}
-                  </p>
-                )}
-                {attendance.hasCheckedOutToday && (
-                  <p className="text-xs text-orange-500">
-                    Break actions disabled - already checked out
                   </p>
                 )}
               </div>
@@ -2319,31 +2407,6 @@ const SupervisorDashboard = () => {
                   </p>
                 )}
               </div>
-              
-              {/* Reset Button - FIXED: Only show when it's actually a new day and user has checked in/out */}
-              {isNewDay() && (attendance.hasCheckedInToday || attendance.hasCheckedOutToday) && (
-                <div className="mt-4">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleResetAttendance}
-                    disabled={isAttendanceLoading}
-                    className="w-full text-sm"
-                  >
-                    {isAttendanceLoading ? (
-                      <>
-                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                        Resetting...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="mr-2 h-3 w-3" />
-                        Reset Attendance for New Day
-                      </>
-                    )}
-                  </Button>
-                </div>
-              )}
             </div>
           </CardContent>
         </Card>
@@ -2377,25 +2440,66 @@ const SupervisorDashboard = () => {
           </Card>
         )}
 
-        {/* Total Employees Summary Card */}
-        <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border-blue-200 dark:border-blue-800">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-800 dark:text-blue-300">Total Employees</p>
-                <p className="text-4xl font-bold text-blue-600 dark:text-blue-400">{summary.totalEmployees}</p>
-                <p className="text-xs text-blue-700 dark:text-blue-500 mt-1">
-                  Across {supervisorSites.length} task-assigned site{supervisorSites.length !== 1 ? 's' : ''}
-                </p>
+        {/* 3x3 Statistics Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Total Employees Card */}
+          <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border-blue-200 dark:border-blue-800 hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-blue-800 dark:text-blue-300">Total Employees</p>
+                  <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{summary.totalEmployees}</p>
+                  <p className="text-xs text-blue-700 dark:text-blue-500 mt-1">
+                    Across {supervisorSites.length} task-assigned site{supervisorSites.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <div className="p-3 bg-blue-100 dark:bg-blue-800 rounded-full">
+                  <Users className="h-6 w-6 text-blue-600 dark:text-blue-300" />
+                </div>
               </div>
-              <div className="p-4 bg-blue-100 dark:bg-blue-800 rounded-full">
-                <Users className="h-8 w-8 text-blue-600 dark:text-blue-300" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        {/* Attendance Summary Cards - Present, Absent, Weekly Off with Click Handlers */}
+          {/* Assigned Tasks Card */}
+          <Card className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border-green-200 dark:border-green-800 hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-800 dark:text-green-300">Assigned Tasks</p>
+                  <p className="text-3xl font-bold text-green-600 dark:text-green-400">{assignedTasksCount}</p>
+                  <p className="text-xs text-green-700 dark:text-green-500 mt-1">
+                    Tasks assigned to you
+                  </p>
+                </div>
+                <div className="p-3 bg-green-100 dark:bg-green-800 rounded-full">
+                  <ClipboardList className="h-6 w-6 text-green-600 dark:text-green-300" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Completed Tasks Card */}
+          <Card className="bg-gradient-to-r from-purple-50 to-violet-50 dark:from-purple-900/20 dark:to-violet-900/20 border-purple-200 dark:border-purple-800 hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-purple-800 dark:text-purple-300">Completed Tasks</p>
+                  <p className="text-3xl font-bold text-purple-600 dark:text-purple-400">{completedTasksCount}</p>
+                  <p className="text-xs text-purple-700 dark:text-purple-500 mt-1">
+                    {assignedTasksCount > 0 
+                      ? `${Math.round((completedTasksCount / assignedTasksCount) * 100)}% completion rate`
+                      : 'No tasks assigned'}
+                  </p>
+                </div>
+                <div className="p-3 bg-purple-100 dark:bg-purple-800 rounded-full">
+                  <CheckCircle2 className="h-6 w-6 text-purple-600 dark:text-purple-300" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Attendance Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Present Card */}
           <motion.div
@@ -2503,41 +2607,62 @@ const SupervisorDashboard = () => {
           </motion.div>
         </div>
 
-        {/* Additional Stats - Leave and Half Day (Not Clickable) */}
+        {/* Additional Stats - Leave and Half Day */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
-            <CardContent className="p-4">
+          {/* On Leave Card */}
+          <Card className="bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-blue-800 dark:text-blue-300">On Leave Today</p>
-                  <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{summary.leaveCount}</p>
+                  <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{todayLeaveCount}</p>
                   <p className="text-xs text-blue-700 dark:text-blue-500 mt-1">
                     {summary.totalEmployees > 0 
-                      ? `${Math.round((summary.leaveCount / summary.totalEmployees) * 100)}% of total`
+                      ? `${Math.round((todayLeaveCount / summary.totalEmployees) * 100)}% of total`
                       : 'No employees'}
                   </p>
+                  {loadingLeaves && (
+                    <div className="mt-1">
+                      <Loader2 className="h-3 w-3 animate-spin text-blue-500 inline mr-1" />
+                      <span className="text-xs text-blue-500">Loading...</span>
+                    </div>
+                  )}
                 </div>
-                <div className="p-2 bg-blue-100 dark:bg-blue-800 rounded-full">
-                  <CalendarDays className="h-5 w-5 text-blue-600 dark:text-blue-300" />
+                <div className="p-3 bg-blue-100 dark:bg-blue-800 rounded-full">
+                  <CalendarDays className="h-6 w-6 text-blue-600 dark:text-blue-300" />
                 </div>
+              </div>
+              <div className="mt-3 text-xs text-blue-700 dark:text-blue-500">
+                <span>Approved leave requests for today</span>
+                {todayLeaveCount > 0 && (
+                  <Button 
+                    variant="link" 
+                    size="sm" 
+                    className="p-0 h-auto text-xs text-blue-600 ml-2"
+                    onClick={() => navigate('/supervisor/leave')}
+                  >
+                    View Details
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
 
+          {/* Half Day Card */}
           <Card className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800">
-            <CardContent className="p-4">
+            <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">Half Day Today</p>
-                  <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{summary.halfDayCount}</p>
+                  <p className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">{summary.halfDayCount}</p>
                   <p className="text-xs text-yellow-700 dark:text-yellow-500 mt-1">
                     {summary.totalEmployees > 0 
                       ? `${Math.round((summary.halfDayCount / summary.totalEmployees) * 100)}% of total`
                       : 'No employees'}
                   </p>
                 </div>
-                <div className="p-2 bg-yellow-100 dark:bg-yellow-800 rounded-full">
-                  <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-300" />
+                <div className="p-3 bg-yellow-100 dark:bg-yellow-800 rounded-full">
+                  <AlertCircle className="h-6 w-6 text-yellow-600 dark:text-yellow-300" />
                 </div>
               </div>
             </CardContent>
@@ -2563,7 +2688,7 @@ const SupervisorDashboard = () => {
                 </div>
                 <div className="flex items-center ml-4">
                   <CalendarDays className="h-4 w-4 text-blue-600 mr-1" />
-                  <span className="text-sm">Leave: {summary.leaveCount}</span>
+                  <span className="text-sm">On Leave: {todayLeaveCount}</span>
                 </div>
                 <div className="flex items-center ml-4">
                   <AlertCircle className="h-4 w-4 text-yellow-600 mr-1" />
@@ -2576,18 +2701,6 @@ const SupervisorDashboard = () => {
             </div>
           </CardContent>
         </Card>
-
-        {/* Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <StatCard title="Total Employees" value={stats.totalEmployees || 0} icon={Users} />
-          <StatCard title="Assigned Tasks" value={stats.assignedTasks || 0} icon={ClipboardList} />
-          <StatCard title="Completed Tasks" value={stats.completedTasks || 0} icon={CheckCircle2} />
-          <StatCard title="Pending Reports" value={stats.pendingReports || 0} icon={FileText} />
-          <StatCard title="Attendance Rate" value={`${stats.attendanceRate || 0}%`} icon={Users} />
-          <StatCard title="Overtime Hours" value={stats.overtimeHours || 0} icon={Clock} />
-          <StatCard title="Productivity" value={`${stats.productivity || 0}%`} icon={TrendingUp} />
-          <StatCard title="Pending Requests" value={stats.pendingRequests || 0} icon={AlertTriangle} />
-        </div>
 
         {/* Search */}
         <div className="relative max-w-md">
@@ -2771,7 +2884,7 @@ const SupervisorDashboard = () => {
           </div>
         </div>
 
-        {/* Empty State - No Data */}
+        {/* Empty State */}
         {summary.totalEmployees === 0 && (
           <Card className="bg-gray-50 border-gray-200">
             <CardContent className="p-12 text-center">
@@ -2801,6 +2914,51 @@ const SupervisorDashboard = () => {
           </Card>
         )}
       </div>
+
+      {/* Photo View Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhotoUrl && (
+              <img
+                src={selectedPhotoUrl}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg shadow-lg"
+                onError={(e) => {
+                  console.error('Failed to load image:', selectedPhotoUrl);
+                  e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2"%3E%3Crect x="2" y="2" width="20" height="20" rx="2.18"%3E%3C/rect%3E%3Cpath d="M8 2v20M16 2v20M2 8h20M2 16h20"%3E%3C/path%3E%3C/svg%3E';
+                  toast.error('Failed to load photo');
+                }}
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>Close</Button>
+            {selectedPhotoUrl && (
+              <Button onClick={() => window.open(selectedPhotoUrl, '_blank')}>
+                <ExternalLink className="h-4 w-4 mr-2" /> Open Original
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Camera Capture Dialog */}
+      <CameraCapture
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onCapture={handlePhotoCapture}
+        title={cameraAction === 'checkin' ? "Take Check-in Photo" : "Take Check-out Photo"}
+        description={cameraAction === 'checkin' 
+          ? "Take a photo to verify your check-in time. This photo will be stored securely." 
+          : "Take a photo to verify your check-out time. This photo will be stored securely."}
+        actionLabel={cameraAction === 'checkin' ? "Use for Check-in" : "Use for Check-out"}
+      />
     </div>
   );
 };

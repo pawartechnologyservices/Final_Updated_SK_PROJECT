@@ -1,5 +1,9 @@
-// backend/src/utils/CloudinaryUtils.ts
-import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
+// utils/cloudinary.ts
+import { v2 as cloudinary, UploadApiResponse, UploadApiOptions } from 'cloudinary';
+import dotenv from 'dotenv';
+import { Readable } from 'stream';
+
+dotenv.config();
 
 // Configure Cloudinary
 cloudinary.config({
@@ -16,12 +20,78 @@ export interface CloudinaryUploadResult {
   format: string;
   width: number;
   height: number;
+  resource_type: string;
 }
+
+// Upload attendance photo with timestamp
+export const uploadAttendancePhoto = async (
+  fileBuffer: Buffer,
+  employeeId: string,
+  employeeName: string,
+  actionType: 'checkin' | 'checkout' | 'breakin' | 'breakout'
+): Promise<CloudinaryUploadResult> => {
+  return new Promise((resolve, reject) => {
+    if (!fileBuffer || fileBuffer.length === 0) {
+      reject(new Error('Empty file buffer provided'));
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const folder = `attendance-photos/${employeeId}`;
+    const publicId = `${folder}/${actionType}_${timestamp}`;
+
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: folder,
+        public_id: publicId,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [
+          {
+            width: 800,
+            height: 800,
+            crop: 'limit',
+            quality: 'auto:best',
+          },
+          {
+            fetch_format: 'auto',
+          },
+        ],
+        context: {
+          employee_id: employeeId,
+          employee_name: employeeName,
+          action_type: actionType,
+          timestamp: new Date().toISOString(),
+        },
+      },
+      (error: any, result: UploadApiResponse | undefined) => {
+        if (error) {
+          console.error('Cloudinary upload error:', error);
+          reject(new Error(`Failed to upload photo: ${error.message}`));
+        } else if (result) {
+          resolve({
+            secure_url: result.secure_url,
+            public_id: result.public_id,
+            url: result.url,
+            bytes: result.bytes,
+            format: result.format,
+            width: result.width,
+            height: result.height,
+            resource_type: result.resource_type,
+          });
+        } else {
+          reject(new Error('Cloudinary upload failed: No result returned'));
+        }
+      }
+    );
+
+    uploadStream.end(fileBuffer);
+  });
+};
 
 // Upload image to Cloudinary with error handling
 export const uploadImageToCloudinary = async (
   fileBuffer: Buffer,
-  folder: string = 'employee-photos'
+  folder: string = 'attendance-photos'
 ): Promise<CloudinaryUploadResult> => {
   return new Promise((resolve, reject) => {
     if (!fileBuffer || fileBuffer.length === 0) {
@@ -35,10 +105,9 @@ export const uploadImageToCloudinary = async (
         allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
         transformation: [
           {
-            width: 500,
-            height: 500,
-            crop: 'fill',
-            gravity: 'face',
+            width: 800,
+            height: 800,
+            crop: 'limit',
             quality: 'auto:best',
           },
         ],
@@ -56,6 +125,7 @@ export const uploadImageToCloudinary = async (
             format: result.format,
             width: result.width,
             height: result.height,
+            resource_type: result.resource_type,
           });
         } else {
           reject(new Error('Cloudinary upload failed: No result returned'));
@@ -105,6 +175,88 @@ export const uploadSignatureToCloudinary = async (
             format: result.format,
             width: result.width,
             height: result.height,
+            resource_type: result.resource_type,
+          });
+        } else {
+          reject(new Error('Cloudinary upload failed: No result returned'));
+        }
+      }
+    );
+
+    uploadStream.end(fileBuffer);
+  });
+};
+
+// Upload document to Cloudinary (supports all file types)
+export const uploadDocumentToCloudinary = async (
+  fileBuffer: Buffer,
+  folder: string = 'employee-documents',
+  originalFilename?: string
+): Promise<CloudinaryUploadResult> => {
+  return new Promise((resolve, reject) => {
+    if (!fileBuffer || fileBuffer.length === 0) {
+      reject(new Error('Empty file buffer provided'));
+      return;
+    }
+
+    // Detect file type from buffer
+    const isPDF = fileBuffer.length > 4 && 
+                  fileBuffer[0] === 0x25 && // %
+                  fileBuffer[1] === 0x50 && // P
+                  fileBuffer[2] === 0x44 && // D
+                  fileBuffer[3] === 0x46;    // F
+
+    const isOfficeDoc = fileBuffer.length > 4 && 
+                       (fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4B); // PK (zip) - for docx/xlsx
+
+    let resourceType: 'auto' | 'image' | 'video' | 'raw' = 'auto';
+    let format: string | undefined = undefined;
+    
+    if (isPDF) {
+      resourceType = 'image';
+      format = 'pdf';
+    } else if (isOfficeDoc) {
+      resourceType = 'raw';
+      if (originalFilename) {
+        const ext = originalFilename.split('.').pop()?.toLowerCase();
+        if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') {
+          format = ext;
+        }
+      }
+    }
+
+    const uploadOptions: UploadApiOptions = {
+      folder: folder,
+      resource_type: resourceType,
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'],
+      use_filename: true,
+      unique_filename: true,
+    };
+
+    if (resourceType === 'raw') {
+      uploadOptions.flags = 'attachment';
+    }
+
+    if (isPDF) {
+      uploadOptions.flags = 'attachment';
+    }
+
+    const uploadStream = cloudinary.uploader.upload_stream(
+      uploadOptions,
+      (error: any, result: UploadApiResponse | undefined) => {
+        if (error) {
+          console.error('Cloudinary document upload error:', error);
+          reject(new Error(`Failed to upload document: ${error.message}`));
+        } else if (result) {
+          resolve({
+            secure_url: result.secure_url,
+            public_id: result.public_id,
+            url: result.url,
+            bytes: result.bytes,
+            format: result.format,
+            width: result.width || 0,
+            height: result.height || 0,
+            resource_type: result.resource_type,
           });
         } else {
           reject(new Error('Cloudinary upload failed: No result returned'));
@@ -117,25 +269,62 @@ export const uploadSignatureToCloudinary = async (
 };
 
 // Delete image from Cloudinary
-export const deleteImageFromCloudinary = async (publicId: string): Promise<void> => {
+export const deleteFromCloudinary = async (publicId: string): Promise<boolean> => {
   try {
     if (!publicId) {
       console.warn('No publicId provided for deletion');
-      return;
+      return false;
     }
     
     const result = await cloudinary.uploader.destroy(publicId);
     
-    if (result.result !== 'ok') {
-      throw new Error(`Failed to delete image: ${result.result}`);
+    if (result.result === 'ok') {
+      console.log(`Successfully deleted image with publicId: ${publicId}`);
+      return true;
+    } else {
+      console.warn(`Failed to delete image: ${result.result}`);
+      return false;
     }
-    
-    console.log(`Successfully deleted image with publicId: ${publicId}`);
   } catch (error: any) {
     console.error('Error deleting image from Cloudinary:', error);
-    // Don't throw the error - we don't want to fail the entire operation
-    // just because we couldn't delete from Cloudinary
+    return false;
   }
+};
+
+// Delete multiple images from Cloudinary
+export const deleteMultipleFromCloudinary = async (publicIds: string[]): Promise<boolean> => {
+  try {
+    if (!publicIds || publicIds.length === 0) {
+      return true;
+    }
+    
+    const result = await cloudinary.api.delete_resources(publicIds);
+    console.log(`Successfully deleted ${publicIds.length} images from Cloudinary`);
+    return true;
+  } catch (error: any) {
+    console.error('Error deleting multiple from Cloudinary:', error);
+    return false;
+  }
+};
+
+// Get Cloudinary URL with transformations
+export const getCloudinaryUrl = (publicId: string, options?: { width?: number; height?: number }): string => {
+  const { width, height } = options || {};
+  
+  if (width && height) {
+    return cloudinary.url(publicId, {
+      width,
+      height,
+      crop: 'fill',
+      quality: 'auto',
+      fetch_format: 'auto'
+    });
+  }
+  
+  return cloudinary.url(publicId, {
+    quality: 'auto',
+    fetch_format: 'auto'
+  });
 };
 
 // Upload multiple files
@@ -158,8 +347,10 @@ export const uploadMultipleToCloudinary = async (
         {
           folder: folder,
           public_id: `${folder}/${Date.now()}-${Math.random().toString(36).substring(7)}`,
-          allowed_formats: ['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx'],
+          allowed_formats: ['jpg', 'jpeg', 'png', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt'],
           resource_type: 'auto',
+          use_filename: true,
+          unique_filename: true,
         },
         (error: any, result: UploadApiResponse | undefined) => {
           if (error) {
@@ -174,6 +365,7 @@ export const uploadMultipleToCloudinary = async (
               format: result.format,
               width: result.width,
               height: result.height,
+              resource_type: result.resource_type,
             });
           } else {
             reject(new Error(`Upload failed for ${file.originalname}`));
@@ -186,6 +378,41 @@ export const uploadMultipleToCloudinary = async (
   });
 
   return Promise.all(uploadPromises);
+};
+
+// Stream upload for large files
+export const uploadStreamToCloudinary = (
+  stream: Readable,
+  folder: string = 'attendance-photos'
+): Promise<CloudinaryUploadResult> => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: folder,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      },
+      (error: any, result: UploadApiResponse | undefined) => {
+        if (error) {
+          reject(error);
+        } else if (result) {
+          resolve({
+            secure_url: result.secure_url,
+            public_id: result.public_id,
+            url: result.url,
+            bytes: result.bytes,
+            format: result.format,
+            width: result.width,
+            height: result.height,
+            resource_type: result.resource_type,
+          });
+        } else {
+          reject(new Error('Upload failed'));
+        }
+      }
+    );
+
+    stream.pipe(uploadStream);
+  });
 };
 
 export { cloudinary };

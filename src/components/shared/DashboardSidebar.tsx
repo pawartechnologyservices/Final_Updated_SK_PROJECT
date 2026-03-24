@@ -132,7 +132,7 @@ const getSidebarItems = (role: UserRole) => {
         ...baseItems,
         { name: "Profile", icon: UserCog, path: "profile" },
         { name: "Supervisors", icon: Shield, path: "supervisors" },
-        // { name: "Team & Tasks", icon: ClipboardList, path: "tasks" },
+    { name: "Assign Task", icon: ClipboardList, path: "assigntask" },
     { name: "Operations", icon: Workflow, path: "operations" }, 
         { name: "Reports", icon: BarChart3, path: "reports" },
         { name: "Leave", icon: Calendar, path: "leave" },
@@ -146,6 +146,8 @@ const getSidebarItems = (role: UserRole) => {
         ...baseItems,
         { name: "Profile", icon: UserCog, path: "profile" },
         { name: "My Tasks", icon: ClipboardList, path: "tasks" },
+        
+    { name: "Assigned task", icon: ClipboardList, path: "assigntask" },
         { name: "Work Query", icon: Workflow, path: "query" },
         { name: "Employees", icon: Users, path: "employees" },
         { name: "Attendance", icon: Calendar, path: "attendance" },

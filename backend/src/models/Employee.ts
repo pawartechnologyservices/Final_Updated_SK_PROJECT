@@ -1,5 +1,19 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+// KYC Document Interface
+interface KYCdocument {
+  documentType: 'aadhar' | 'pan' | 'electricity' | 'driving' | 'police' | 'voter' | 'passport' | 'other';
+  documentName: string;
+  documentNumber?: string;
+  fileUrl: string;
+  filePublicId: string;
+  uploadedAt: Date;
+  verified: boolean;
+  verifiedAt?: Date;
+  verifiedBy?: string;
+  expiryDate?: Date;
+}
+
 // Site History Entry Interface
 interface SiteHistoryEntry {
   siteName: string;
@@ -73,8 +87,11 @@ export interface IEmployee extends Document {
   westcoatIssued: boolean;
   apronIssued: boolean;
   
-  // Site History - NEW FIELD
+  // Site History
   siteHistory?: SiteHistoryEntry[];
+  
+  // KYC Documents
+  kycDocuments: KYCdocument[];
   
   // Documents - Cloudinary URLs
   photo?: string;
@@ -408,13 +425,52 @@ const EmployeeSchema: Schema = new Schema(
       default: false
     },
     
-    // Site History - NEW FIELD
+    // Site History
     siteHistory: {
       type: [{
         siteName: { type: String, required: true },
         assignedDate: { type: Date, required: true, default: Date.now },
         leftDate: { type: Date },
         daysWorked: { type: Number }
+      }],
+      default: []
+    },
+    
+    // KYC Documents
+    kycDocuments: {
+      type: [{
+        documentType: {
+          type: String,
+          enum: ['aadhar', 'pan', 'electricity', 'driving', 'police', 'voter', 'passport', 'other'],
+          required: true
+        },
+        documentName: {
+          type: String,
+          required: true
+        },
+        documentNumber: {
+          type: String,
+          trim: true
+        },
+        fileUrl: {
+          type: String,
+          required: true
+        },
+        filePublicId: {
+          type: String,
+          required: true
+        },
+        uploadedAt: {
+          type: Date,
+          default: Date.now
+        },
+        verified: {
+          type: Boolean,
+          default: false
+        },
+        verifiedAt: Date,
+        verifiedBy: String,
+        expiryDate: Date
       }],
       default: []
     },
@@ -459,6 +515,14 @@ const EmployeeSchema: Schema = new Schema(
         delete ret.photoPublicId;
         delete ret.employeeSignaturePublicId;
         delete ret.authorizedSignaturePublicId;
+        
+        // Remove public IDs from KYC documents
+        if (ret.kycDocuments) {
+          ret.kycDocuments = ret.kycDocuments.map((doc: any) => {
+            const { filePublicId, ...rest } = doc;
+            return rest;
+          });
+        }
         return ret;
       }
     },
@@ -469,6 +533,14 @@ const EmployeeSchema: Schema = new Schema(
         delete ret.photoPublicId;
         delete ret.employeeSignaturePublicId;
         delete ret.authorizedSignaturePublicId;
+        
+        // Remove public IDs from KYC documents
+        if (ret.kycDocuments) {
+          ret.kycDocuments = ret.kycDocuments.map((doc: any) => {
+            const { filePublicId, ...rest } = doc;
+            return rest;
+          });
+        }
         return ret;
       }
     }
@@ -483,6 +555,8 @@ EmployeeSchema.index({ status: 1 });
 EmployeeSchema.index({ department: 1 });
 EmployeeSchema.index({ dateOfJoining: -1 });
 EmployeeSchema.index({ siteName: 1 });
+EmployeeSchema.index({ 'kycDocuments.verified': 1 });
+EmployeeSchema.index({ 'kycDocuments.documentType': 1 });
 
 // Virtual for formatted date
 EmployeeSchema.virtual('formattedDateOfJoining').get(function() {
@@ -495,6 +569,24 @@ EmployeeSchema.virtual('formattedDateOfBirth').get(function() {
 
 EmployeeSchema.virtual('formattedDateOfExit').get(function() {
   return this.dateOfExit ? this.dateOfExit.toISOString().split('T')[0] : '';
+});
+
+// Virtual for KYC completion status
+EmployeeSchema.virtual('kycCompletionPercentage').get(function() {
+  const requiredDocs = ['aadhar', 'pan', 'police'];
+  const uploadedDocs = this.kycDocuments?.map((doc: any) => doc.documentType) || [];
+  const verifiedDocs = this.kycDocuments?.filter((doc: any) => doc.verified).map((doc: any) => doc.documentType) || [];
+  
+  const uploadedCount = requiredDocs.filter(type => uploadedDocs.includes(type)).length;
+  const verifiedCount = requiredDocs.filter(type => verifiedDocs.includes(type)).length;
+  
+  return {
+    uploaded: (uploadedCount / requiredDocs.length) * 100,
+    verified: (verifiedCount / requiredDocs.length) * 100,
+    requiredDocs,
+    uploadedDocs,
+    verifiedDocs
+  };
 });
 
 // Post-save middleware for error handling
@@ -583,10 +675,24 @@ EmployeeSchema.statics.getValidGenders = function() {
   return ['Male', 'Female', 'Transgender'];
 };
 
+EmployeeSchema.statics.getDocumentTypes = function() {
+  return {
+    aadhar: { label: 'Aadhaar Card', required: true },
+    pan: { label: 'PAN Card', required: true },
+    electricity: { label: 'Electricity Bill', required: false },
+    driving: { label: 'Driving License', required: false },
+    police: { label: 'Police Verification', required: true },
+    voter: { label: 'Voter ID', required: false },
+    passport: { label: 'Passport', required: false },
+    other: { label: 'Other Document', required: false }
+  };
+};
+
 interface EmployeeModel extends mongoose.Model<IEmployee> {
   getValidDepartments(): string[];
   getValidBloodGroups(): string[];
   getValidGenders(): string[];
+  getDocumentTypes(): Record<string, { label: string; required: boolean }>;
 }
 
 export default mongoose.model<IEmployee, EmployeeModel>('Employee', EmployeeSchema);

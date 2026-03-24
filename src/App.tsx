@@ -91,6 +91,8 @@ import WorkQuery from "./pages/supervisor/WorkQuery";
 import SuperAdminWorkIssues from "./pages/superadmin/SuperAdminWorkIssues";
 import AdminAttendanceView from "./pages/admin/AdminAttendanceView";
 import AdminHRMS from "./pages/admin/AdminHRMS";
+import SupervisorAssignTask from "./pages/supervisor/SupervisorAssignTask";
+import ManagerAssignTask from "./pages/manager/ManagerAssignTask";
 //import { AuthProvider } from "./contexts/AuthContext";
 // import AdminCRM from "./pages/admin/AdminCRM";
 
@@ -185,6 +187,7 @@ const App = () => (
               <Route path="managerattendance" element={<ManagerAttendance />}/>
               <Route path="notifications" element={<ManagerNotifications />} />
               <Route path="settings" element={<ManagerSettings />} />
+              <Route path="assigntask" element={<ManagerAssignTask />} />
             </Route>
 
             {/* Supervisor Routes */}
@@ -206,6 +209,7 @@ const App = () => (
               <Route path="leave" element={<SupervisorLeave />} />
               <Route path="reports" element={<SupervisorReports />} />
                <Route path="settings" element={<SupervisorSettings />} />
+               <Route path="assigntask" element={<SupervisorAssignTask />}/>
             </Route>
 
             {/* Employee Routes */}

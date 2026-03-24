@@ -14,6 +14,8 @@ import StatCard from "./StatCard";
 import SearchBar from "./SearchBar";
 import Pagination from "./Pagination";
 import ExcelImportDialog from "./ExcelImportDialog";
+// NEW: Import DocumentUpload component
+import DocumentUpload from './DocumentUpload';
 import axios from "axios";
 import * as XLSX from 'xlsx';
 import { format, differenceInDays } from 'date-fns';
@@ -192,6 +194,12 @@ const EmployeesTab = ({
   const [selectedJoinDate, setSelectedJoinDate] = useState<string>("");
   const [selectedEmployeeForDocuments, setSelectedEmployeeForDocuments] = useState<Employee | null>(null);
   const [documentsDialogOpen, setDocumentsDialogOpen] = useState(false);
+  // NEW: State for document upload dialog
+  const [documentUploadDialogOpen, setDocumentUploadDialogOpen] = useState(false);
+  // NEW: State for selected employee for document upload
+  const [selectedEmployeeForDocumentUpload, setSelectedEmployeeForDocumentUpload] = useState<Employee | null>(null);
+  // NEW: State to refresh documents
+  const [refreshDocuments, setRefreshDocuments] = useState(false);
   const [epfForm11DialogOpen, setEpfForm11DialogOpen] = useState(false);
   const [selectedEmployeeForEPF, setSelectedEmployeeForEPF] = useState<Employee | null>(null);
   const [isSavingEPF, setIsSavingEPF] = useState(false);
@@ -282,7 +290,7 @@ const EmployeesTab = ({
   // Fetch employees from API
   useEffect(() => {
     fetchEmployees();
-  }, [employeesPage, employeesItemsPerPage, searchTerm, selectedDepartment, selectedSite, selectedJoinDate, sortBy]);
+  }, [employeesPage, employeesItemsPerPage, searchTerm, selectedDepartment, selectedSite, selectedJoinDate, sortBy, refreshDocuments]); // NEW: Added refreshDocuments to dependencies
 
   // Fetch sites from API
   useEffect(() => {
@@ -375,6 +383,8 @@ const EmployeesTab = ({
             emergencyContactPhone: emp.emergencyContactPhone || "",
             emergencyContactRelation: emp.emergencyContactRelation || "",
             siteHistory: emp.siteHistory || [],
+            // NEW: Add kycDocuments field
+            kycDocuments: emp.kycDocuments || [],
             isManager: false,
             isSupervisor: false
           };
@@ -887,6 +897,20 @@ const EmployeesTab = ({
   const handleViewHistory = (employee: ExtendedEmployee) => {
     setSelectedEmployeeForHistory(employee);
     setHistoryDialogOpen(true);
+  };
+
+  // NEW: Handle opening document upload dialog
+  const handleOpenDocumentUpload = (employee: Employee) => {
+    setSelectedEmployeeForDocumentUpload(employee);
+    setDocumentUploadDialogOpen(true);
+  };
+
+  // NEW: Handle document upload completion
+  const handleDocumentUploaded = () => {
+    // Refresh the employee data to show updated documents
+    fetchEmployees();
+    setRefreshDocuments(prev => !prev);
+    toast.success('Documents refreshed');
   };
 
   // Bulk operations handlers
@@ -1698,7 +1722,9 @@ const EmployeesTab = ({
         employeeSignaturePublicId: null,
         authorizedSignature: null,
         authorizedSignaturePublicId: null,
-        siteHistory: []
+        siteHistory: [],
+        // NEW: Initialize kycDocuments as empty array
+        kycDocuments: []
       };
       
       employeesToImport.push(employeeData);
@@ -3256,6 +3282,45 @@ const EmployeesTab = ({
         loading={isImporting}
       />
 
+      {/* NEW: Document Upload Dialog */}
+      <Dialog open={documentUploadDialogOpen} onOpenChange={setDocumentUploadDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <Upload className="h-5 w-5 text-blue-600" />
+              Upload KYC Documents - {selectedEmployeeForDocumentUpload?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Employee ID: {selectedEmployeeForDocumentUpload?.employeeId} | Department: {selectedEmployeeForDocumentUpload?.department}
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedEmployeeForDocumentUpload && (
+            <DocumentUpload 
+              employeeId={selectedEmployeeForDocumentUpload.id || selectedEmployeeForDocumentUpload._id || ''}
+              employeeName={selectedEmployeeForDocumentUpload.name}
+              existingDocuments={selectedEmployeeForDocumentUpload.kycDocuments || []}
+              onDocumentUploaded={() => {
+                handleDocumentUploaded();
+                // Refresh the employee data in the dialog
+                const updatedEmp = employees.find(e => 
+                  (e.id === selectedEmployeeForDocumentUpload.id || e._id === selectedEmployeeForDocumentUpload._id)
+                );
+                if (updatedEmp) {
+                  setSelectedEmployeeForDocumentUpload(updatedEmp);
+                }
+              }}
+            />
+          )}
+          
+          <div className="flex justify-end pt-4 border-t">
+            <Button variant="outline" onClick={() => setDocumentUploadDialogOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={epfForm11DialogOpen} onOpenChange={setEpfForm11DialogOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader>
@@ -4637,11 +4702,82 @@ const EmployeesTab = ({
           </DialogHeader>
           {selectedEmployeeForDocuments && (
             <div className="space-y-6">
+              {/* KYC Documents Section */}
               <div>
-                <h4 className="font-semibold text-lg mb-4">Uploaded Documents</h4>
-                {selectedEmployeeForDocuments.documents && selectedEmployeeForDocuments.documents.length > 0 ? (
+                <h4 className="font-semibold text-lg mb-4 flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-blue-600" />
+                  KYC Documents
+                </h4>
+                {selectedEmployeeForDocuments.kycDocuments && selectedEmployeeForDocuments.kycDocuments.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {selectedEmployeeForDocuments.documents.map((doc, index) => (
+                    {selectedEmployeeForDocuments.kycDocuments.map((doc: any, index: number) => (
+                      <div key={index} className="border rounded-lg p-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <FileText className="h-8 w-8 text-blue-500 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium truncate">{doc.documentName}</p>
+                              {doc.documentNumber && (
+                                <p className="text-sm text-muted-foreground truncate">
+                                  Number: {doc.documentNumber}
+                                </p>
+                              )}
+                              <p className="text-xs text-muted-foreground">
+                                Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}
+                                {doc.expiryDate && ` • Expires: ${new Date(doc.expiryDate).toLocaleDateString()}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 self-start sm:self-center">
+                            {doc.verified ? (
+                              <Badge className="bg-green-100 text-green-800">
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                Verified
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-amber-600">
+                                <XCircle className="h-3 w-3 mr-1" />
+                                Pending
+                              </Badge>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => window.open(doc.fileUrl, '_blank')}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground border rounded-lg">
+                    <FileText className="mx-auto h-12 w-12 mb-4" />
+                    <p>No KYC documents uploaded for this employee</p>
+                    <Button
+                      variant="outline"
+                      className="mt-4"
+                      onClick={() => {
+                        setDocumentsDialogOpen(false);
+                        setSelectedEmployeeForDocumentUpload(selectedEmployeeForDocuments);
+                        setDocumentUploadDialogOpen(true);
+                      }}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Documents
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Other Documents Section (if you have other document types) */}
+              {selectedEmployeeForDocuments.documents && selectedEmployeeForDocuments.documents.length > 0 && (
+                <div>
+                  <h4 className="font-semibold text-lg mb-4">Other Documents</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {selectedEmployeeForDocuments.documents.map((doc: any, index) => (
                       <div key={index} className="border rounded-lg p-4">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
@@ -4661,14 +4797,10 @@ const EmployeesTab = ({
                       </div>
                     ))}
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground border rounded-lg">
-                    <FileText className="mx-auto h-12 w-12 mb-4" />
-                    <p>No documents uploaded for this employee</p>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
 
+              {/* Available Forms Section */}
               <div>
                 <h4 className="font-semibold text-lg mb-4">Available Forms</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -4774,6 +4906,7 @@ const EmployeesTab = ({
                 </div>
               </div>
 
+              {/* Employee Photo Section */}
               {(selectedEmployeeForDocuments.photo || selectedEmployeeForDocuments.photoPublicId) && (
                 <div>
                   <h4 className="font-semibold text-lg mb-4">Employee Photo</h4>
@@ -4889,6 +5022,13 @@ const EmployeesTab = ({
                             {employee.siteHistory.length} {employee.siteHistory.length === 1 ? 'Move' : 'Moves'}
                           </Badge>
                         )}
+                        {/* NEW: Show KYC document count */}
+                        {employee.kycDocuments && employee.kycDocuments.length > 0 && (
+                          <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                            <Shield className="h-3 w-3 mr-1" />
+                            {employee.kycDocuments.length} KYC
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4912,6 +5052,18 @@ const EmployeesTab = ({
                     >
                       <History className="h-3 w-3" />
                       History
+                    </Button>
+                    
+                    {/* NEW: Document Upload Button */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleOpenDocumentUpload(employee)}
+                      className="flex items-center gap-1 flex-1 sm:flex-none bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700"
+                      title="Upload KYC Documents"
+                    >
+                      <Upload className="h-3 w-3" />
+                      <span className="hidden sm:inline">Upload</span>
                     </Button>
                     
                     <Button
@@ -4975,7 +5127,7 @@ const EmployeesTab = ({
                             <strong>Documents:</strong>
                             <div className="mt-2 space-y-2">
                               {employee.documents && employee.documents.length > 0 ? (
-                                employee.documents.map(doc => (
+                                employee.documents.map((doc: any) => (
                                   <div key={doc.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 border rounded">
                                     <div className="flex items-center gap-2">
                                       <FileText className="h-4 w-4" />

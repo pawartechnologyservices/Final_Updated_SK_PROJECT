@@ -1,7 +1,10 @@
+// routes/attendanceRoutes.ts
 import express from 'express';
 import {
   checkIn,
   checkOut,
+  checkInWithPhoto,
+  checkOutWithPhoto,
   breakIn,
   breakOut,
   getTodayStatus,
@@ -11,7 +14,8 @@ import {
   updateAttendance,
   getWeeklySummary,
   manualAttendance,
-  updateAttendanceStatus // Add this import
+  updateAttendanceStatus,
+  upload
 } from '../controllers/attendanceController';
 
 const router = express.Router();
@@ -19,6 +23,12 @@ const router = express.Router();
 // Check in/out routes
 router.post('/checkin', checkIn);
 router.post('/checkout', checkOut);
+
+// Check in/out with photo routes
+router.post('/checkin-with-photo', upload.single('photo'), checkInWithPhoto);
+router.post('/checkout-with-photo', upload.single('photo'), checkOutWithPhoto);
+
+// Break routes
 router.post('/breakin', breakIn);
 router.post('/breakout', breakOut);
 
@@ -31,7 +41,7 @@ router.get('/', getAllAttendance);
 // Update attendance (admin/supervisor)
 router.put('/:id', updateAttendance);
 
-// NEW: Update attendance status (admin/supervisor)
+// Update attendance status (admin/supervisor)
 router.post('/update-status', updateAttendanceStatus);
 
 // Manual attendance entry

@@ -62,7 +62,9 @@ import {
   Menu,
   Globe,
   Home,
-  ChevronDown as ChevronDownIcon
+  ChevronDown as ChevronDownIcon,
+  Camera,
+  ExternalLink
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useEffect, useCallback } from "react";
@@ -76,13 +78,15 @@ const API_URL = process.env.NODE_ENV === 'development'
   ? `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:5001/api` 
   : '/api';
 
-// Types for Manager Attendance (from your backend)
+// Types for Manager Attendance (from your backend) with photo fields
 interface ManagerAttendanceRecord {
   _id: string;
   managerId: string;
   managerName: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -110,6 +114,8 @@ interface MonthSummaryResponse {
       day: string;
       checkIn: string;
       checkOut: string;
+      checkInPhoto: string | null;
+      checkOutPhoto: string | null;
       status: string;
       totalHours: string;
       breakTime: string;
@@ -136,7 +142,7 @@ interface MonthSummaryResponse {
   };
 }
 
-// Types for Supervisor Attendance (only their own data)
+// Types for Supervisor Attendance with photo fields
 interface SupervisorAttendanceRecord {
   id: string;
   employeeId: string;
@@ -145,6 +151,8 @@ interface SupervisorAttendanceRecord {
   date: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -159,6 +167,8 @@ interface AttendanceStatus {
   isOnBreak: boolean;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -264,15 +274,17 @@ const getTodayDateString = (): string => {
   return `${year}-${month}-${day}`;
 };
 
-// Mobile responsive card for manager attendance
+// Mobile responsive card for manager attendance with photo
 const MobileManagerAttendanceCard = ({ 
   record, 
   getStatusBadge, 
-  getStatusIcon 
+  getStatusIcon,
+  onViewPhoto
 }: { 
   record: any; 
   getStatusBadge: (status: string) => string;
   getStatusIcon: (status: string) => JSX.Element | null;
+  onViewPhoto: (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => void;
 }) => {
   return (
     <Card className="mb-3 overflow-hidden">
@@ -302,6 +314,15 @@ const MobileManagerAttendanceCard = ({
               <LogIn className="h-3 w-3 text-green-500" />
               {record.checkIn}
             </div>
+            {record.checkInPhoto && (
+              <button
+                onClick={() => onViewPhoto(record.checkInPhoto, 'checkin')}
+                className="text-xs text-blue-500 mt-1 flex items-center gap-1"
+              >
+                <Camera className="h-3 w-3" />
+                View Photo
+              </button>
+            )}
           </div>
           <div className="p-2 bg-gray-50 rounded">
             <p className="text-xs text-muted-foreground">Check Out</p>
@@ -309,6 +330,15 @@ const MobileManagerAttendanceCard = ({
               <LogOut className="h-3 w-3 text-red-500" />
               {record.checkOut}
             </div>
+            {record.checkOutPhoto && (
+              <button
+                onClick={() => onViewPhoto(record.checkOutPhoto, 'checkout')}
+                className="text-xs text-blue-500 mt-1 flex items-center gap-1"
+              >
+                <Camera className="h-3 w-3" />
+                View Photo
+              </button>
+            )}
           </div>
           <div className="p-2 bg-gray-50 rounded">
             <p className="text-xs text-muted-foreground">Hours</p>
@@ -336,13 +366,15 @@ const MobileManagerAttendanceCard = ({
   );
 };
 
-// Mobile responsive card for supervisor attendance
+// Mobile responsive card for supervisor attendance with photo
 const MobileSupervisorAttendanceCard = ({ 
   record, 
-  getStatusBadge 
+  getStatusBadge,
+  onViewPhoto
 }: { 
   record: SupervisorAttendanceRecord; 
   getStatusBadge: (status: string) => string;
+  onViewPhoto: (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => void;
 }) => {
   return (
     <Card className="mb-3">
@@ -364,6 +396,15 @@ const MobileSupervisorAttendanceCard = ({
               <LogIn className="h-3 w-3" />
               {record.checkInTime || "-"}
             </div>
+            {record.checkInPhoto && (
+              <button
+                onClick={() => onViewPhoto(record.checkInPhoto, 'checkin')}
+                className="text-xs text-blue-500 mt-1 flex items-center gap-1"
+              >
+                <Camera className="h-3 w-3" />
+                View Photo
+              </button>
+            )}
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Check Out</p>
@@ -371,6 +412,15 @@ const MobileSupervisorAttendanceCard = ({
               <LogOut className="h-3 w-3" />
               {record.checkOutTime || "-"}
             </div>
+            {record.checkOutPhoto && (
+              <button
+                onClick={() => onViewPhoto(record.checkOutPhoto, 'checkout')}
+                className="text-xs text-blue-500 mt-1 flex items-center gap-1"
+              >
+                <Camera className="h-3 w-3" />
+                View Photo
+              </button>
+            )}
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Hours</p>
@@ -386,7 +436,7 @@ const MobileSupervisorAttendanceCard = ({
   );
 };
 
-// Manager Attendance View Component (from your backend) with site info and date filters
+// Manager Attendance View Component with Photo Support
 const ManagerAttendanceView = ({ 
   managerId, 
   managerName, 
@@ -416,6 +466,9 @@ const ManagerAttendanceView = ({
   const [dateRangeStart, setDateRangeStart] = useState<string>("");
   const [dateRangeEnd, setDateRangeEnd] = useState<string>("");
   const [showDateRange, setShowDateRange] = useState(false);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
 
   useEffect(() => {
     const checkMobile = () => {
@@ -427,6 +480,16 @@ const ManagerAttendanceView = ({
     
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhoto(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    } else {
+      toast.error('No photo available for this record');
+    }
+  };
 
   const months = [
     { value: 1, label: "January" },
@@ -522,7 +585,7 @@ const ManagerAttendanceView = ({
   const handleExport = () => {
     if (!filteredRecords.length) return;
     
-    const headers = ["Date", "Day", "Check In", "Check Out", "Status", "Total Hours", "Break Time", "Break Duration", "Breaks", "Overtime"];
+    const headers = ["Date", "Day", "Check In", "Check Out", "Check In Photo URL", "Check Out Photo URL", "Status", "Total Hours", "Break Time", "Break Duration", "Breaks", "Overtime"];
     const csvContent = [
       headers.join(","),
       ...filteredRecords.map((record: any) => [
@@ -530,6 +593,8 @@ const ManagerAttendanceView = ({
         record.day,
         record.checkIn,
         record.checkOut,
+        record.checkInPhoto || '',
+        record.checkOutPhoto || '',
         record.status,
         record.totalHours,
         record.breakTime,
@@ -591,456 +656,543 @@ const ManagerAttendanceView = ({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl border shadow-2xl rounded-2xl p-0 overflow-hidden max-h-[90vh] flex flex-col">
-        {/* Fixed Header */}
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-4 md:p-6 flex-shrink-0">
-          <DialogHeader>
-            <DialogTitle className="text-xl md:text-2xl font-bold text-white flex items-center gap-3">
-              <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
-                <Briefcase className="h-5 w-5 md:h-6 md:w-6" />
-              </div>
-              <span className="truncate">Manager Attendance: {managerName}</span>
-            </DialogTitle>
-            <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 mt-2 text-emerald-100">
-              <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4 flex-shrink-0" />
-                <span className="text-xs md:text-sm truncate">{managerEmail}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Briefcase className="h-4 w-4 flex-shrink-0" />
-                <span className="text-xs md:text-sm truncate">{managerDepartment}</span>
-              </div>
-            </div>
-            
-            {/* Assigned Sites Display */}
-            <div className="mt-3">
-              {assignedSites && assignedSites.length > 0 ? (
-                <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
-                  {assignedSites.map((site, index) => (
-                    <Badge key={index} variant="secondary" className="bg-white/20 text-white border-white/30 text-xs">
-                      <Building className="h-3 w-3 mr-1 flex-shrink-0" />
-                      <span className="truncate max-w-[150px]">{site.siteName}</span>
-                      {site.clientName && <span className="ml-1 opacity-75 truncate max-w-[100px]">({site.clientName})</span>}
-                    </Badge>
-                  ))}
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-6xl border shadow-2xl rounded-2xl p-0 overflow-hidden max-h-[90vh] flex flex-col">
+          {/* Fixed Header */}
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-4 md:p-6 flex-shrink-0">
+            <DialogHeader>
+              <DialogTitle className="text-xl md:text-2xl font-bold text-white flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
+                  <Briefcase className="h-5 w-5 md:h-6 md:w-6" />
                 </div>
-              ) : (
-                <Badge variant="secondary" className="bg-white/10 text-white border-white/20 text-xs">
-                  {/* <Building className="h-3 w-3 mr-1" />
-                  No Sites Assigned */}
-                </Badge>
-              )}
-            </div>
-          </DialogHeader>
-        </div>
+                <span className="truncate">Manager Attendance: {managerName}</span>
+              </DialogTitle>
+              <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 mt-2 text-emerald-100">
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-xs md:text-sm truncate">{managerEmail}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Briefcase className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-xs md:text-sm truncate">{managerDepartment}</span>
+                </div>
+              </div>
+              
+              {/* Assigned Sites Display */}
+              <div className="mt-3">
+                {assignedSites && assignedSites.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
+                    {assignedSites.map((site, index) => (
+                      <Badge key={index} variant="secondary" className="bg-white/20 text-white border-white/30 text-xs">
+                        <Building className="h-3 w-3 mr-1 flex-shrink-0" />
+                        <span className="truncate max-w-[150px]">{site.siteName}</span>
+                        {site.clientName && <span className="ml-1 opacity-75 truncate max-w-[100px]">({site.clientName})</span>}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </DialogHeader>
+          </div>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
-          {/* Current Status Card */}
-          {currentStatus && (
-            <Card className="border-2 border-emerald-100 dark:border-emerald-900/30 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20">
-              <CardContent className="p-3 md:p-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 md:p-3 bg-emerald-500 rounded-xl">
-                      <Clock className="h-5 w-5 md:h-6 md:w-6 text-white" />
-                    </div>
-                    <div>
-                      <h3 className="text-xs md:text-sm font-medium text-muted-foreground">Current Status</h3>
-                      <div className="flex flex-wrap items-center gap-2 mt-1">
-                        <span className="text-lg md:text-2xl font-bold text-foreground">
-                          {currentStatus.isCheckedIn ? 'Checked In' : 'Not Checked In'}
-                        </span>
-                        {currentStatus.isOnBreak && (
-                          <Badge className="bg-amber-500 text-white text-xs">
-                            <Coffee className="h-3 w-3 mr-1" />
-                            On Break
-                          </Badge>
-                        )}
+          {/* Scrollable Content */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
+            {/* Current Status Card */}
+            {currentStatus && (
+              <Card className="border-2 border-emerald-100 dark:border-emerald-900/30 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20">
+                <CardContent className="p-3 md:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 md:p-3 bg-emerald-500 rounded-xl">
+                        <Clock className="h-5 w-5 md:h-6 md:w-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs md:text-sm font-medium text-muted-foreground">Current Status</h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          <span className="text-lg md:text-2xl font-bold text-foreground">
+                            {currentStatus.isCheckedIn ? 'Checked In' : 'Not Checked In'}
+                          </span>
+                          {currentStatus.isOnBreak && (
+                            <Badge className="bg-amber-500 text-white text-xs">
+                              <Coffee className="h-3 w-3 mr-1" />
+                              On Break
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                     </div>
+                    {currentStatus.checkInTime && (
+                      <div className="text-left sm:text-right">
+                        <p className="text-xs text-muted-foreground">Check-in Time</p>
+                        <p className="text-base md:text-lg font-semibold">
+                          {formatTimeForDisplay(currentStatus.checkInTime)}
+                        </p>
+                        {currentStatus.checkInPhoto && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewPhoto(currentStatus.checkInPhoto, 'checkin')}
+                            className="mt-1 h-6 px-2 text-xs"
+                          >
+                            <Camera className="h-3 w-3 mr-1" />
+                            View Photo
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {currentStatus.checkOutPhoto && (
+                      <div className="text-left sm:text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewPhoto(currentStatus.checkOutPhoto, 'checkout')}
+                          className="mt-1 h-6 px-2 text-xs"
+                        >
+                          <Camera className="h-3 w-3 mr-1" />
+                          View Check-out Photo
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                  {currentStatus.checkInTime && (
-                    <div className="text-left sm:text-right">
-                      <p className="text-xs text-muted-foreground">Check-in Time</p>
-                      <p className="text-base md:text-lg font-semibold">
-                        {formatTimeForDisplay(currentStatus.checkInTime)}
-                      </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Month/Year Selection and Filters */}
+            <Card>
+              <CardContent className="p-3 md:p-4">
+                <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                    <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
+                      <SelectTrigger className="w-full sm:w-[140px] md:w-[180px] h-9 md:h-11">
+                        <Calendar className="h-4 w-4 mr-2 flex-shrink-0" />
+                        <SelectValue placeholder="Month" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {months.map(month => (
+                          <SelectItem key={month.value} value={month.value.toString()}>
+                            {month.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
+                      <SelectTrigger className="w-full sm:w-[100px] md:w-[120px] h-9 md:h-11">
+                        <SelectValue placeholder="Year" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {years.map(year => (
+                          <SelectItem key={year} value={year.toString()}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="h-9 md:h-11"
+                      onClick={fetchAttendanceData}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Load
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 md:h-11"
+                      onClick={() => setShowDateRange(!showDateRange)}
+                    >
+                      <CalendarDays className="h-4 w-4 mr-2" />
+                      {showDateRange ? "Hide Range" : "Date Range"}
+                    </Button>
+
+                    <Select value={myFilter} onValueChange={setMyFilter}>
+                      <SelectTrigger className="w-full sm:w-[140px] h-9 md:h-11">
+                        <SelectValue placeholder="Filter by status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="present">Present</SelectItem>
+                        <SelectItem value="present_half">Present & Half</SelectItem>
+                        <SelectItem value="absent">Absent</SelectItem>
+                        <SelectItem value="late">Late</SelectItem>
+                        <SelectItem value="halfday">Half Day</SelectItem>
+                        <SelectItem value="checkedin">Checked In</SelectItem>
+                        <SelectItem value="weeklyoff">Weekly Off</SelectItem>
+                        <SelectItem value="leave">Leave</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Button variant="outline" size="sm" className="h-9 md:h-11" onClick={handleExport} disabled={!filteredRecords.length}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                  </div>
+                </div>
+
+                {showDateRange && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mt-4 p-3 bg-gray-50 rounded-lg"
+                  >
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
+                        <Label className="text-sm whitespace-nowrap">From:</Label>
+                        <Input
+                          type="date"
+                          value={dateRangeStart}
+                          onChange={(e) => setDateRangeStart(e.target.value)}
+                          className="w-full sm:w-auto"
+                        />
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
+                        <Label className="text-sm whitespace-nowrap">To:</Label>
+                        <Input
+                          type="date"
+                          value={dateRangeEnd}
+                          onChange={(e) => setDateRangeEnd(e.target.value)}
+                          className="w-full sm:w-auto"
+                        />
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto">
+                        Clear
+                      </Button>
                     </div>
+                  </motion.div>
+                )}
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {mySelectedDate && (
+                    <Badge variant="outline" className="bg-blue-50">
+                      Date: {new Date(mySelectedDate).toLocaleDateString()}
+                      <button className="ml-2 hover:text-red-500" onClick={() => setMySelectedDate("")}>×</button>
+                    </Badge>
+                  )}
+                  {dateRangeStart && dateRangeEnd && (
+                    <Badge variant="outline" className="bg-purple-50">
+                      Range: {new Date(dateRangeStart).toLocaleDateString()} - {new Date(dateRangeEnd).toLocaleDateString()}
+                      <button className="ml-2 hover:text-red-500" onClick={() => { setDateRangeStart(""); setDateRangeEnd(""); }}>×</button>
+                    </Badge>
+                  )}
+                  {myFilter !== "all" && (
+                    <Badge variant="outline" className="bg-amber-50">
+                      Filter: {myFilter.replace('_', ' ')}
+                      <button className="ml-2 hover:text-red-500" onClick={() => setMyFilter("all")}>×</button>
+                    </Badge>
                   )}
                 </div>
               </CardContent>
             </Card>
-          )}
 
-          {/* Month/Year Selection and Filters */}
-          <Card>
-            <CardContent className="p-3 md:p-4">
-              <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-                <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                  <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
-                    <SelectTrigger className="w-full sm:w-[140px] md:w-[180px] h-9 md:h-11">
-                      <Calendar className="h-4 w-4 mr-2 flex-shrink-0" />
-                      <SelectValue placeholder="Month" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {months.map(month => (
-                        <SelectItem key={month.value} value={month.value.toString()}>
-                          {month.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
-                    <SelectTrigger className="w-full sm:w-[100px] md:w-[120px] h-9 md:h-11">
-                      <SelectValue placeholder="Year" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {years.map(year => (
-                        <SelectItem key={year} value={year.toString()}>
-                          {year}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    className="h-9 md:h-11"
-                    onClick={fetchAttendanceData}
-                  >
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Load
-                  </Button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-9 md:h-11"
-                    onClick={() => setShowDateRange(!showDateRange)}
-                  >
-                    <CalendarDays className="h-4 w-4 mr-2" />
-                    {showDateRange ? "Hide Range" : "Date Range"}
-                  </Button>
-
-                  <Select value={myFilter} onValueChange={setMyFilter}>
-                    <SelectTrigger className="w-full sm:w-[140px] h-9 md:h-11">
-                      <SelectValue placeholder="Filter by status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="present">Present</SelectItem>
-                      <SelectItem value="present_half">Present & Half</SelectItem>
-                      <SelectItem value="absent">Absent</SelectItem>
-                      <SelectItem value="late">Late</SelectItem>
-                      <SelectItem value="halfday">Half Day</SelectItem>
-                      <SelectItem value="checkedin">Checked In</SelectItem>
-                      <SelectItem value="weeklyoff">Weekly Off</SelectItem>
-                      <SelectItem value="leave">Leave</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  <Button variant="outline" size="sm" className="h-9 md:h-11" onClick={handleExport} disabled={!filteredRecords.length}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export
-                  </Button>
-                </div>
-              </div>
-
-              {showDateRange && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mt-4 p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
-                      <Label className="text-sm whitespace-nowrap">From:</Label>
-                      <Input
-                        type="date"
-                        value={dateRangeStart}
-                        onChange={(e) => setDateRangeStart(e.target.value)}
-                        className="w-full sm:w-auto"
-                      />
-                    </div>
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full">
-                      <Label className="text-sm whitespace-nowrap">To:</Label>
-                      <Input
-                        type="date"
-                        value={dateRangeEnd}
-                        onChange={(e) => setDateRangeEnd(e.target.value)}
-                        className="w-full sm:w-auto"
-                      />
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto">
-                      Clear
-                    </Button>
+            {loading ? (
+              <div className="min-h-[300px] md:min-h-[400px] flex items-center justify-center">
+                <div className="text-center">
+                  <div className="relative">
+                    <div className="w-12 h-12 md:w-16 md:h-16 border-4 border-muted rounded-full"></div>
+                    <div className="absolute top-0 left-0 w-12 h-12 md:w-16 md:h-16 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                    <Clock className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 h-5 w-5 md:h-6 md:w-6 text-primary" />
                   </div>
-                </motion.div>
-              )}
-
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {mySelectedDate && (
-                  <Badge variant="outline" className="bg-blue-50">
-                    Date: {new Date(mySelectedDate).toLocaleDateString()}
-                    <button className="ml-2 hover:text-red-500" onClick={() => setMySelectedDate("")}>×</button>
-                  </Badge>
-                )}
-                {dateRangeStart && dateRangeEnd && (
-                  <Badge variant="outline" className="bg-purple-50">
-                    Range: {new Date(dateRangeStart).toLocaleDateString()} - {new Date(dateRangeEnd).toLocaleDateString()}
-                    <button className="ml-2 hover:text-red-500" onClick={() => { setDateRangeStart(""); setDateRangeEnd(""); }}>×</button>
-                  </Badge>
-                )}
-                {myFilter !== "all" && (
-                  <Badge variant="outline" className="bg-amber-50">
-                    Filter: {myFilter.replace('_', ' ')}
-                    <button className="ml-2 hover:text-red-500" onClick={() => setMyFilter("all")}>×</button>
-                  </Badge>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {loading ? (
-            <div className="min-h-[300px] md:min-h-[400px] flex items-center justify-center">
-              <div className="text-center">
-                <div className="relative">
-                  <div className="w-12 h-12 md:w-16 md:h-16 border-4 border-muted rounded-full"></div>
-                  <div className="absolute top-0 left-0 w-12 h-12 md:w-16 md:h-16 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-                  <Clock className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 h-5 w-5 md:h-6 md:w-6 text-primary" />
+                  <p className="mt-4 text-sm md:text-base text-muted-foreground">Loading attendance data...</p>
                 </div>
-                <p className="mt-4 text-sm md:text-base text-muted-foreground">Loading attendance data...</p>
               </div>
-            </div>
-          ) : attendanceData ? (
-            <>
-              {/* Stats Cards */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-                <Card className="bg-gradient-to-br from-green-50 to-emerald-50 border-green-200">
-                  <CardContent className="p-3 md:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Present</p>
-                        <p className="text-lg md:text-2xl font-bold text-green-600">
-                          {attendanceData.data.stats.presentDays}
-                        </p>
-                      </div>
-                      <div className="p-1.5 md:p-2 bg-green-500 rounded-lg">
-                        <CheckCircle className="h-4 w-4 md:h-5 md:w-5 text-white" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
-                  <CardContent className="p-3 md:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Late</p>
-                        <p className="text-lg md:text-2xl font-bold text-amber-600">
-                          {attendanceData.data.stats.lateDays}
-                        </p>
-                      </div>
-                      <div className="p-1.5 md:p-2 bg-amber-500 rounded-lg">
-                        <Clock className="h-4 w-4 md:h-5 md:w-5 text-white" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
-                  <CardContent className="p-3 md:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Hours</p>
-                        <p className="text-lg md:text-2xl font-bold text-blue-600">
-                          {attendanceData.data.stats.totalHours}h
-                        </p>
-                      </div>
-                      <div className="p-1.5 md:p-2 bg-blue-500 rounded-lg">
-                        <Timer className="h-4 w-4 md:h-5 md:w-5 text-white" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="bg-gradient-to-br from-purple-50 to-pink-50 border-purple-200">
-                  <CardContent className="p-3 md:p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Rate</p>
-                        <p className="text-lg md:text-2xl font-bold text-purple-600">
-                          {attendanceData.data.stats.attendanceRate}%
-                        </p>
-                      </div>
-                      <div className="p-1.5 md:p-2 bg-purple-500 rounded-lg">
-                        <TrendingUp className="h-4 w-4 md:h-5 md:w-5 text-white" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Daily Records Table/Cards */}
-              <Card>
-                <CardHeader className="p-3 md:p-4">
-                  <CardTitle className="text-base md:text-lg font-semibold flex items-center gap-2">
-                    <CalendarDays className="h-4 w-4 md:h-5 md:w-5 text-emerald-500" />
-                    Daily Records - {months.find(m => m.value === selectedMonth)?.label} {selectedYear}
-                    <span className="text-xs md:text-sm font-normal text-muted-foreground ml-2">
-                      ({filteredRecords.length} records)
-                    </span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  {isMobileView ? (
-                    <div className="p-3 space-y-3 max-h-[400px] overflow-y-auto">
-                      {filteredRecords.length > 0 ? (
-                        filteredRecords.map((record, index) => (
-                          <MobileManagerAttendanceCard
-                            key={record.date}
-                            record={record}
-                            getStatusBadge={getStatusBadge}
-                            getStatusIcon={getStatusIcon}
-                          />
-                        ))
-                      ) : (
-                        <div className="text-center py-8">
-                          <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-muted-foreground">No records found</p>
+            ) : attendanceData ? (
+              <>
+                {/* Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+                  <Card className="bg-gradient-to-br from-green-50 to-emerald-50 border-green-200">
+                    <CardContent className="p-3 md:p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Present</p>
+                          <p className="text-lg md:text-2xl font-bold text-green-600">
+                            {attendanceData.data.stats.presentDays}
+                          </p>
                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Day</TableHead>
-                            <TableHead>Check In</TableHead>
-                            <TableHead>Check Out</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Hours</TableHead>
-                            <TableHead>Break</TableHead>
-                            <TableHead>Breaks</TableHead>
-                            <TableHead>Overtime</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredRecords.length > 0 ? (
-                            filteredRecords.map((record) => (
-                              <TableRow key={record.date}>
-                                <TableCell className="font-medium whitespace-nowrap">
-                                  {new Date(record.date).toLocaleDateString()}
-                                </TableCell>
-                                <TableCell>{record.day}</TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-2 whitespace-nowrap">
-                                    <LogIn className="h-4 w-4 text-green-500 flex-shrink-0" />
-                                    {record.checkIn}
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-2 whitespace-nowrap">
-                                    <LogOut className="h-4 w-4 text-red-500 flex-shrink-0" />
-                                    {record.checkOut}
-                                  </div>
-                                </TableCell>
-                                <TableCell>
-                                  <Badge className={`${getStatusBadge(record.status)} whitespace-nowrap`}>
-                                    {record.status}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="font-medium whitespace-nowrap">{record.totalHours}h</TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-1 whitespace-nowrap">
-                                    <Coffee className="h-4 w-4 text-amber-500 flex-shrink-0" />
-                                    {record.breakDuration}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-center whitespace-nowrap">{record.breaks}</TableCell>
-                                <TableCell className="whitespace-nowrap">
-                                  {parseFloat(record.overtime) > 0 ? (
-                                    <span className="text-green-600 font-semibold">+{record.overtime}h</span>
-                                  ) : (
-                                    "-"
-                                  )}
+                        <div className="p-1.5 md:p-2 bg-green-500 rounded-lg">
+                          <CheckCircle className="h-4 w-4 md:h-5 md:w-5 text-white" />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
+                    <CardContent className="p-3 md:p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Late</p>
+                          <p className="text-lg md:text-2xl font-bold text-amber-600">
+                            {attendanceData.data.stats.lateDays}
+                          </p>
+                        </div>
+                        <div className="p-1.5 md:p-2 bg-amber-500 rounded-lg">
+                          <Clock className="h-4 w-4 md:h-5 md:w-5 text-white" />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
+                    <CardContent className="p-3 md:p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Hours</p>
+                          <p className="text-lg md:text-2xl font-bold text-blue-600">
+                            {attendanceData.data.stats.totalHours}h
+                          </p>
+                        </div>
+                        <div className="p-1.5 md:p-2 bg-blue-500 rounded-lg">
+                          <Timer className="h-4 w-4 md:h-5 md:w-5 text-white" />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-gradient-to-br from-purple-50 to-pink-50 border-purple-200">
+                    <CardContent className="p-3 md:p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Rate</p>
+                          <p className="text-lg md:text-2xl font-bold text-purple-600">
+                            {attendanceData.data.stats.attendanceRate}%
+                          </p>
+                        </div>
+                        <div className="p-1.5 md:p-2 bg-purple-500 rounded-lg">
+                          <TrendingUp className="h-4 w-4 md:h-5 md:w-5 text-white" />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Daily Records Table/Cards */}
+                <Card>
+                  <CardHeader className="p-3 md:p-4">
+                    <CardTitle className="text-base md:text-lg font-semibold flex items-center gap-2">
+                      <CalendarDays className="h-4 w-4 md:h-5 md:w-5 text-emerald-500" />
+                      Daily Records - {months.find(m => m.value === selectedMonth)?.label} {selectedYear}
+                      <span className="text-xs md:text-sm font-normal text-muted-foreground ml-2">
+                        ({filteredRecords.length} records)
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {isMobileView ? (
+                      <div className="p-3 space-y-3 max-h-[400px] overflow-y-auto">
+                        {filteredRecords.length > 0 ? (
+                          filteredRecords.map((record, index) => (
+                            <MobileManagerAttendanceCard
+                              key={record.date}
+                              record={record}
+                              getStatusBadge={getStatusBadge}
+                              getStatusIcon={getStatusIcon}
+                              onViewPhoto={handleViewPhoto}
+                            />
+                          ))
+                        ) : (
+                          <div className="text-center py-8">
+                            <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                            <p className="text-muted-foreground">No records found</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Day</TableHead>
+                              <TableHead>Check In</TableHead>
+                              <TableHead>Check Out</TableHead>
+                              <TableHead>Check In Photo</TableHead>
+                              <TableHead>Check Out Photo</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Hours</TableHead>
+                              <TableHead>Break</TableHead>
+                              <TableHead>Breaks</TableHead>
+                              <TableHead>Overtime</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredRecords.length > 0 ? (
+                              filteredRecords.map((record) => (
+                                <TableRow key={record.date}>
+                                  <TableCell className="font-medium whitespace-nowrap">
+                                    {new Date(record.date).toLocaleDateString()}
+                                  </TableCell>
+                                  <TableCell>{record.day}</TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-2 whitespace-nowrap">
+                                      <LogIn className="h-4 w-4 text-green-500 flex-shrink-0" />
+                                      {record.checkIn}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-2 whitespace-nowrap">
+                                      <LogOut className="h-4 w-4 text-red-500 flex-shrink-0" />
+                                      {record.checkOut}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    {record.checkInPhoto ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleViewPhoto(record.checkInPhoto, 'checkin')}
+                                        className="h-8 px-2"
+                                      >
+                                        <Camera className="h-4 w-4 mr-1" />
+                                        View
+                                      </Button>
+                                    ) : (
+                                      <span className="text-muted-foreground text-sm">-</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    {record.checkOutPhoto ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleViewPhoto(record.checkOutPhoto, 'checkout')}
+                                        className="h-8 px-2"
+                                      >
+                                        <Camera className="h-4 w-4 mr-1" />
+                                        View
+                                      </Button>
+                                    ) : (
+                                      <span className="text-muted-foreground text-sm">-</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge className={`${getStatusBadge(record.status)} whitespace-nowrap`}>
+                                      {record.status}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="font-medium whitespace-nowrap">{record.totalHours}h</TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-1 whitespace-nowrap">
+                                      <Coffee className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                                      {record.breakDuration}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="text-center whitespace-nowrap">{record.breaks}</TableCell>
+                                  <TableCell className="whitespace-nowrap">
+                                    {parseFloat(record.overtime) > 0 ? (
+                                      <span className="text-green-600 font-semibold">+{record.overtime}h</span>
+                                    ) : (
+                                      "-"
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={11} className="text-center py-8">
+                                  No records found
                                 </TableCell>
                               </TableRow>
-                            ))
-                          ) : (
-                            <TableRow>
-                              <TableCell colSpan={9} className="text-center py-8">
-                                No records found
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
 
-              {/* Summary Card */}
-              <Card className="bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200">
-                <CardContent className="p-4 md:p-6">
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-6">
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Avg Hours</p>
-                      <p className="text-lg md:text-2xl font-bold">{attendanceData.data.stats.averageHours}h</p>
+                {/* Summary Card */}
+                <Card className="bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200">
+                  <CardContent className="p-4 md:p-6">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-6">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Avg Hours</p>
+                        <p className="text-lg md:text-2xl font-bold">{attendanceData.data.stats.averageHours}h</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Total Break</p>
+                        <p className="text-lg md:text-2xl font-bold">
+                          {formatDuration(parseFloat(attendanceData.data.stats.totalBreakTime))}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Overtime</p>
+                        <p className="text-lg md:text-2xl font-bold text-green-600">
+                          {attendanceData.data.stats.totalOvertime}h
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Absent</p>
+                        <p className="text-lg md:text-2xl font-bold text-red-600">
+                          {attendanceData.data.stats.absentDays}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Half Days</p>
+                        <p className="text-lg md:text-2xl font-bold text-amber-600">
+                          {attendanceData.data.stats.halfDays}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Total Break</p>
-                      <p className="text-lg md:text-2xl font-bold">
-                        {formatDuration(parseFloat(attendanceData.data.stats.totalBreakTime))}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Overtime</p>
-                      <p className="text-lg md:text-2xl font-bold text-green-600">
-                        {attendanceData.data.stats.totalOvertime}h
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Absent</p>
-                      <p className="text-lg md:text-2xl font-bold text-red-600">
-                        {attendanceData.data.stats.absentDays}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">Half Days</p>
-                      <p className="text-lg md:text-2xl font-bold text-amber-600">
-                        {attendanceData.data.stats.halfDays}
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </>
-          ) : (
-            <div className="min-h-[300px] md:min-h-[400px] flex items-center justify-center">
-              <div className="text-center">
-                <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No attendance data found</p>
+                  </CardContent>
+                </Card>
+              </>
+            ) : (
+              <div className="min-h-[300px] md:min-h-[400px] flex items-center justify-center">
+                <div className="text-center">
+                  <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground">No attendance data found</p>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Photo Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhoto && (
+              <img
+                src={selectedPhoto}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg shadow-lg"
+                onError={(e) => {
+                  console.error('Failed to load image:', selectedPhoto);
+                  e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2"%3E%3Crect x="2" y="2" width="20" height="20" rx="2.18"%3E%3C/rect%3E%3Cpath d="M8 2v20M16 2v20M2 8h20M2 16h20"%3E%3C/path%3E%3C/svg%3E';
+                  toast.error('Failed to load photo');
+                }}
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>Close</Button>
+            {selectedPhoto && (
+              <Button onClick={() => window.open(selectedPhoto, '_blank')}>
+                <ExternalLink className="h-4 w-4 mr-2" /> Open Original
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
-// Supervisor Attendance View Component (only their own data) with date filters
+// Supervisor Attendance View Component with Photo Support
 const SupervisorAttendanceView = ({ 
   supervisorId, 
   supervisorName, 
@@ -1069,6 +1221,9 @@ const SupervisorAttendanceView = ({
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
 
   const months = [
     { value: 1, label: "January" },
@@ -1097,6 +1252,16 @@ const SupervisorAttendanceView = ({
     
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhoto(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    } else {
+      toast.error('No photo available for this record');
+    }
+  };
 
   const loadSupervisorAttendance = async () => {
     try {
@@ -1143,6 +1308,8 @@ const SupervisorAttendanceView = ({
               date: recordDate,
               checkInTime: record.checkInTime ? formatTimeForDisplay(record.checkInTime) : "-",
               checkOutTime: record.checkOutTime ? formatTimeForDisplay(record.checkOutTime) : "-",
+              checkInPhoto: record.checkInPhoto || null,
+              checkOutPhoto: record.checkOutPhoto || null,
               breakStartTime: record.breakStartTime ? formatTimeForDisplay(record.breakStartTime) : "-",
               breakEndTime: record.breakEndTime ? formatTimeForDisplay(record.breakEndTime) : "-",
               totalHours: Number(record.totalHours) || 0,
@@ -1165,7 +1332,6 @@ const SupervisorAttendanceView = ({
         console.log('History API call failed:', historyError);
       }
       
-      // If no data from API, use empty array
       setSupervisorAttendance([]);
       setFilteredAttendance([]);
       
@@ -1187,14 +1353,12 @@ const SupervisorAttendanceView = ({
   useEffect(() => {
     let filtered = [...supervisorAttendance];
     
-    // Filter by date range
     if (dateRangeStart && dateRangeEnd) {
       filtered = filtered.filter(record => 
         record.date >= dateRangeStart && record.date <= dateRangeEnd
       );
     }
     
-    // Filter by month/year
     if (selectedMonth && selectedYear) {
       const monthStr = String(selectedMonth).padStart(2, '0');
       filtered = filtered.filter(record => {
@@ -1203,7 +1367,6 @@ const SupervisorAttendanceView = ({
       });
     }
     
-    // Filter by status
     if (statusFilter !== "all") {
       filtered = filtered.filter(record => 
         record.status.toLowerCase() === statusFilter.toLowerCase()
@@ -1216,7 +1379,7 @@ const SupervisorAttendanceView = ({
   const handleExport = () => {
     if (!filteredAttendance.length) return;
     
-    const headers = ["Date", "Shift", "Check In", "Check Out", "Break In", "Break Out", "Hours", "Break Time", "Status"];
+    const headers = ["Date", "Shift", "Check In", "Check Out", "Check In Photo URL", "Check Out Photo URL", "Break In", "Break Out", "Hours", "Break Time", "Status"];
     const csvContent = [
       headers.join(","),
       ...filteredAttendance.map(record => [
@@ -1224,6 +1387,8 @@ const SupervisorAttendanceView = ({
         record.shift,
         record.checkInTime,
         record.checkOutTime,
+        record.checkInPhoto || '',
+        record.checkOutPhoto || '',
         record.breakStartTime,
         record.breakEndTime,
         record.hours.toFixed(2),
@@ -1296,282 +1461,406 @@ const SupervisorAttendanceView = ({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl border shadow-2xl rounded-2xl p-0 overflow-hidden max-h-[90vh] flex flex-col">
-        {/* Fixed Header */}
-        <div className="bg-gradient-to-r from-amber-600 to-orange-600 p-4 md:p-6 flex-shrink-0">
-          <DialogHeader>
-            <DialogTitle className="text-xl md:text-2xl font-bold text-white flex items-center gap-3">
-              <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
-                <Shield className="h-5 w-5 md:h-6 md:w-6" />
-              </div>
-              <span className="truncate">Supervisor Attendance: {supervisorName}</span>
-            </DialogTitle>
-            <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 mt-2 text-amber-100">
-              <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4 flex-shrink-0" />
-                <span className="text-xs md:text-sm truncate">{supervisorEmail}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Briefcase className="h-4 w-4 flex-shrink-0" />
-                <span className="text-xs md:text-sm truncate">{supervisorDepartment}</span>
-              </div>
-            </div>
-            
-            {/* Assigned Sites Display */}
-            <div className="mt-3">
-              {assignedSites && assignedSites.length > 0 ? (
-                <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
-                  {assignedSites.map((site, index) => (
-                    <Badge key={index} variant="secondary" className="bg-white/20 text-white border-white/30 text-xs">
-                      <Building className="h-3 w-3 mr-1 flex-shrink-0" />
-                      <span className="truncate max-w-[150px]">{site.siteName}</span>
-                      {site.clientName && <span className="ml-1 opacity-75 truncate max-w-[100px]">({site.clientName})</span>}
-                    </Badge>
-                  ))}
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-4xl border shadow-2xl rounded-2xl p-0 overflow-hidden max-h-[90vh] flex flex-col">
+          {/* Fixed Header */}
+          <div className="bg-gradient-to-r from-amber-600 to-orange-600 p-4 md:p-6 flex-shrink-0">
+            <DialogHeader>
+              <DialogTitle className="text-xl md:text-2xl font-bold text-white flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-xl flex-shrink-0">
+                  <Shield className="h-5 w-5 md:h-6 md:w-6" />
                 </div>
-              ) : (
-                <Badge variant="secondary" className="bg-white/10 text-white border-white/20 text-xs">
-                  {/* <Building className="h-3 w-3 mr-1" />
-                  No Sites Assigned */}
-                </Badge>
-              )}
-            </div>
-          </DialogHeader>
-        </div>
-
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
-          {apiError && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 md:p-4 flex items-center gap-3">
-              <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0" />
-              <p className="text-sm text-yellow-700">{apiError}</p>
-            </div>
-          )}
-
-          {/* Filters Card */}
-          <Card>
-            <CardContent className="p-3 md:p-4">
-              <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-                <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                  <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
-                    <SelectTrigger className="w-full sm:w-[140px] md:w-[180px] h-9 md:h-11">
-                      <Calendar className="h-4 w-4 mr-2 flex-shrink-0" />
-                      <SelectValue placeholder="Month" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {months.map(month => (
-                        <SelectItem key={month.value} value={month.value.toString()}>
-                          {month.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
-                    <SelectTrigger className="w-full sm:w-[100px] md:w-[120px] h-9 md:h-11">
-                      <SelectValue placeholder="Year" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {years.map(year => (
-                        <SelectItem key={year} value={year.toString()}>
-                          {year}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <span className="truncate">Supervisor Attendance: {supervisorName}</span>
+              </DialogTitle>
+              <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4 mt-2 text-amber-100">
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-xs md:text-sm truncate">{supervisorEmail}</span>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
-                    <Input
-                      type="date"
-                      placeholder="From"
-                      value={dateRangeStart}
-                      onChange={(e) => setDateRangeStart(e.target.value)}
-                      className="w-full sm:w-[140px] h-9 md:h-11"
-                    />
-                    <span className="text-muted-foreground hidden sm:inline">to</span>
-                    <Input
-                      type="date"
-                      placeholder="To"
-                      value={dateRangeEnd}
-                      onChange={(e) => setDateRangeEnd(e.target.value)}
-                      className="w-full sm:w-[140px] h-9 md:h-11"
-                    />
+                <div className="flex items-center gap-2">
+                  <Briefcase className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-xs md:text-sm truncate">{supervisorDepartment}</span>
+                </div>
+              </div>
+              
+              {/* Assigned Sites Display */}
+              <div className="mt-3">
+                {assignedSites && assignedSites.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
+                    {assignedSites.map((site, index) => (
+                      <Badge key={index} variant="secondary" className="bg-white/20 text-white border-white/30 text-xs">
+                        <Building className="h-3 w-3 mr-1 flex-shrink-0" />
+                        <span className="truncate max-w-[150px]">{site.siteName}</span>
+                        {site.clientName && <span className="ml-1 opacity-75 truncate max-w-[100px]">({site.clientName})</span>}
+                      </Badge>
+                    ))}
                   </div>
-
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-full sm:w-[120px] h-9 md:h-11">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="present">Present</SelectItem>
-                      <SelectItem value="absent">Absent</SelectItem>
-                      <SelectItem value="in progress">In Progress</SelectItem>
-                      <SelectItem value="weekly off">Weekly Off</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  <Button variant="outline" size="sm" className="h-9 md:h-11" onClick={handleExport} disabled={!filteredAttendance.length}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export
-                  </Button>
-
-                  <Button variant="ghost" size="sm" className="h-9 md:h-11" onClick={clearFilters}>
-                    Clear
-                  </Button>
-                </div>
+                ) : null}
               </div>
+            </DialogHeader>
+          </div>
 
-              <div className="mt-3 text-xs text-muted-foreground">
-                Showing {filteredAttendance.length} records
-                {dateRangeStart && dateRangeEnd && ` from ${new Date(dateRangeStart).toLocaleDateString()} to ${new Date(dateRangeEnd).toLocaleDateString()}`}
+          {/* Scrollable Content */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
+            {apiError && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 md:p-4 flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0" />
+                <p className="text-sm text-yellow-700">{apiError}</p>
               </div>
-            </CardContent>
-          </Card>
+            )}
 
-          <Card>
-            <CardHeader className="p-3 md:p-4">
-              <CardTitle className="text-base md:text-lg font-semibold flex items-center gap-2">
-                <Calendar className="h-4 w-4 md:h-5 md:w-5" />
-                Attendance History
-              </CardTitle>
-              <CardDescription className="text-xs md:text-sm">
-                Showing only attendance records for {supervisorName}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {isMobileView ? (
-                <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                  {sortedAttendanceData.length > 0 ? (
-                    sortedAttendanceData.map((record) => (
-                      <MobileSupervisorAttendanceCard
-                        key={record.id}
-                        record={record}
-                        getStatusBadge={getStatusBadge}
-                      />
-                    ))
-                  ) : (
-                    <div className="text-center py-8 text-muted-foreground">
-                      No attendance records found.
+            {/* Current Status Card */}
+            {currentStatus && (
+              <Card className="border-2 border-amber-100 dark:border-amber-900/30 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20">
+                <CardContent className="p-3 md:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 md:p-3 bg-amber-500 rounded-xl">
+                        <Clock className="h-5 w-5 md:h-6 md:w-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs md:text-sm font-medium text-muted-foreground">Current Status</h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          <span className="text-lg md:text-2xl font-bold text-foreground">
+                            {currentStatus.isCheckedIn ? 'Checked In' : 'Not Checked In'}
+                          </span>
+                          {currentStatus.isOnBreak && (
+                            <Badge className="bg-amber-500 text-white text-xs">
+                              <Coffee className="h-3 w-3 mr-1" />
+                              On Break
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Shift</TableHead>
-                        <TableHead>Check In</TableHead>
-                        <TableHead>Check Out</TableHead>
-                        <TableHead>Break In</TableHead>
-                        <TableHead>Break Out</TableHead>
-                        <TableHead className="text-right">Hours</TableHead>
-                        <TableHead className="text-right">Break Time</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sortedAttendanceData.length > 0 ? (
-                        sortedAttendanceData.map((record) => (
-                          <TableRow key={record.id}>
-                            <TableCell className="font-medium whitespace-nowrap">
-                              {record.date}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline" className="bg-gray-100 text-gray-800 border-gray-200 whitespace-nowrap">
-                                {record.shift}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2 whitespace-nowrap">
-                                <LogIn className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                {record.checkInTime || "-"}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2 whitespace-nowrap">
-                                <LogOut className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                {record.checkOutTime || "-"}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2 whitespace-nowrap">
-                                <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                {record.breakStartTime || "-"}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2 whitespace-nowrap">
-                                <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                                {record.breakEndTime || "-"}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right font-medium whitespace-nowrap">
-                              {record.hours.toFixed(2)} hrs
-                            </TableCell>
-                            <TableCell className="text-right font-medium whitespace-nowrap">
-                              {record.breakTime.toFixed(2)} hrs
-                            </TableCell>
-                            <TableCell>
-                              <Badge className={`${getStatusBadge(record.status.toLowerCase())} whitespace-nowrap`}>
-                                {record.status}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      ) : (
-                        <TableRow>
-                          <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                            No attendance records found.
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                    {currentStatus.checkInTime && (
+                      <div className="text-left sm:text-right">
+                        <p className="text-xs text-muted-foreground">Check-in Time</p>
+                        <p className="text-base md:text-lg font-semibold">
+                          {formatTimeForDisplay(currentStatus.checkInTime)}
+                        </p>
+                        {currentStatus.checkInPhoto && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewPhoto(currentStatus.checkInPhoto, 'checkin')}
+                            className="mt-1 h-6 px-2 text-xs"
+                          >
+                            <Camera className="h-3 w-3 mr-1" />
+                            View Photo
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {currentStatus.checkOutPhoto && (
+                      <div className="text-left sm:text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewPhoto(currentStatus.checkOutPhoto, 'checkout')}
+                          className="mt-1 h-6 px-2 text-xs"
+                        >
+                          <Camera className="h-3 w-3 mr-1" />
+                          View Check-out Photo
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
-          {/* Summary Stats */}
-          {sortedAttendanceData.length > 0 && (
-            <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
-              <CardContent className="p-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Total Records</p>
-                    <p className="text-xl font-bold">{sortedAttendanceData.length}</p>
+            {/* Filters Card */}
+            <Card>
+              <CardContent className="p-3 md:p-4">
+                <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                    <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
+                      <SelectTrigger className="w-full sm:w-[140px] md:w-[180px] h-9 md:h-11">
+                        <Calendar className="h-4 w-4 mr-2 flex-shrink-0" />
+                        <SelectValue placeholder="Month" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {months.map(month => (
+                          <SelectItem key={month.value} value={month.value.toString()}>
+                            {month.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
+                      <SelectTrigger className="w-full sm:w-[100px] md:w-[120px] h-9 md:h-11">
+                        <SelectValue placeholder="Year" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {years.map(year => (
+                          <SelectItem key={year} value={year.toString()}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Present</p>
-                    <p className="text-xl font-bold text-green-600">
-                      {sortedAttendanceData.filter(r => r.status === "Present").length}
-                    </p>
+
+                  <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 w-full sm:w-auto">
+                      <Input
+                        type="date"
+                        placeholder="From"
+                        value={dateRangeStart}
+                        onChange={(e) => setDateRangeStart(e.target.value)}
+                        className="w-full sm:w-[140px] h-9 md:h-11"
+                      />
+                      <span className="text-muted-foreground hidden sm:inline">to</span>
+                      <Input
+                        type="date"
+                        placeholder="To"
+                        value={dateRangeEnd}
+                        onChange={(e) => setDateRangeEnd(e.target.value)}
+                        className="w-full sm:w-[140px] h-9 md:h-11"
+                      />
+                    </div>
+
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="w-full sm:w-[120px] h-9 md:h-11">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="present">Present</SelectItem>
+                        <SelectItem value="absent">Absent</SelectItem>
+                        <SelectItem value="in progress">In Progress</SelectItem>
+                        <SelectItem value="weekly off">Weekly Off</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Button variant="outline" size="sm" className="h-9 md:h-11" onClick={handleExport} disabled={!filteredAttendance.length}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+
+                    <Button variant="ghost" size="sm" className="h-9 md:h-11" onClick={clearFilters}>
+                      Clear
+                    </Button>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Total Hours</p>
-                    <p className="text-xl font-bold">
-                      {sortedAttendanceData.reduce((sum, r) => sum + r.hours, 0).toFixed(2)} hrs
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Avg Hours/Day</p>
-                    <p className="text-xl font-bold">
-                      {(sortedAttendanceData.reduce((sum, r) => sum + r.hours, 0) / sortedAttendanceData.length || 0).toFixed(2)} hrs
-                    </p>
-                  </div>
+                </div>
+
+                <div className="mt-3 text-xs text-muted-foreground">
+                  Showing {filteredAttendance.length} records
+                  {dateRangeStart && dateRangeEnd && ` from ${new Date(dateRangeStart).toLocaleDateString()} to ${new Date(dateRangeEnd).toLocaleDateString()}`}
                 </div>
               </CardContent>
             </Card>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+
+            <Card>
+              <CardHeader className="p-3 md:p-4">
+                <CardTitle className="text-base md:text-lg font-semibold flex items-center gap-2">
+                  <Calendar className="h-4 w-4 md:h-5 md:w-5" />
+                  Attendance History
+                </CardTitle>
+                <CardDescription className="text-xs md:text-sm">
+                  Showing only attendance records for {supervisorName}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isMobileView ? (
+                  <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                    {sortedAttendanceData.length > 0 ? (
+                      sortedAttendanceData.map((record) => (
+                        <MobileSupervisorAttendanceCard
+                          key={record.id}
+                          record={record}
+                          getStatusBadge={getStatusBadge}
+                          onViewPhoto={handleViewPhoto}
+                        />
+                      ))
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No attendance records found.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Shift</TableHead>
+                          <TableHead>Check In</TableHead>
+                          <TableHead>Check Out</TableHead>
+                          <TableHead>Check In Photo</TableHead>
+                          <TableHead>Check Out Photo</TableHead>
+                          <TableHead>Break In</TableHead>
+                          <TableHead>Break Out</TableHead>
+                          <TableHead className="text-right">Hours</TableHead>
+                          <TableHead className="text-right">Break Time</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {sortedAttendanceData.length > 0 ? (
+                          sortedAttendanceData.map((record) => (
+                            <TableRow key={record.id}>
+                              <TableCell className="font-medium whitespace-nowrap">
+                                {record.date}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="bg-gray-100 text-gray-800 border-gray-200 whitespace-nowrap">
+                                  {record.shift}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2 whitespace-nowrap">
+                                  <LogIn className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                                  {record.checkInTime || "-"}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2 whitespace-nowrap">
+                                  <LogOut className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                                  {record.checkOutTime || "-"}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {record.checkInPhoto ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleViewPhoto(record.checkInPhoto, 'checkin')}
+                                    className="h-8 px-2"
+                                  >
+                                    <Camera className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {record.checkOutPhoto ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleViewPhoto(record.checkOutPhoto, 'checkout')}
+                                    className="h-8 px-2"
+                                  >
+                                    <Camera className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2 whitespace-nowrap">
+                                  <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                                  {record.breakStartTime || "-"}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2 whitespace-nowrap">
+                                  <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                                  {record.breakEndTime || "-"}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right font-medium whitespace-nowrap">
+                                {record.hours.toFixed(2)} hrs
+                              </TableCell>
+                              <TableCell className="text-right font-medium whitespace-nowrap">
+                                {record.breakTime.toFixed(2)} hrs
+                              </TableCell>
+                              <TableCell>
+                                <Badge className={`${getStatusBadge(record.status.toLowerCase())} whitespace-nowrap`}>
+                                  {record.status}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                              No attendance records found.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Summary Stats */}
+            {sortedAttendanceData.length > 0 && (
+              <Card className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
+                <CardContent className="p-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Records</p>
+                      <p className="text-xl font-bold">{sortedAttendanceData.length}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Present</p>
+                      <p className="text-xl font-bold text-green-600">
+                        {sortedAttendanceData.filter(r => r.status === "Present").length}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Hours</p>
+                      <p className="text-xl font-bold">
+                        {sortedAttendanceData.reduce((sum, r) => sum + r.hours, 0).toFixed(2)} hrs
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Avg Hours/Day</p>
+                      <p className="text-xl font-bold">
+                        {(sortedAttendanceData.reduce((sum, r) => sum + r.hours, 0) / sortedAttendanceData.length || 0).toFixed(2)} hrs
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Photo Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhoto && (
+              <img
+                src={selectedPhoto}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg shadow-lg"
+                onError={(e) => {
+                  console.error('Failed to load image:', selectedPhoto);
+                  e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2"%3E%3Crect x="2" y="2" width="20" height="20" rx="2.18"%3E%3C/rect%3E%3Cpath d="M8 2v20M16 2v20M2 8h20M2 16h20"%3E%3C/path%3E%3C/svg%3E';
+                  toast.error('Failed to load photo');
+                }}
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>Close</Button>
+            {selectedPhoto && (
+              <Button onClick={() => window.open(selectedPhoto, '_blank')}>
+                <ExternalLink className="h-4 w-4 mr-2" /> Open Original
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
@@ -1892,27 +2181,6 @@ const UserForm = ({
   );
 };
 
-// Hash icon component
-const Hash = (props: any) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    width="24"
-    height="24"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    {...props}
-  >
-    <line x1="4" y1="9" x2="20" y2="9" />
-    <line x1="4" y1="15" x2="20" y2="15" />
-    <line x1="10" y1="3" x2="8" y2="21" />
-    <line x1="16" y1="3" x2="14" y2="21" />
-  </svg>
-);
-
 // User List Component
 const UserList = ({ 
   title, 
@@ -1937,14 +2205,9 @@ const UserList = ({
   const [managerAttendanceViewOpen, setManagerAttendanceViewOpen] = useState(false);
   const [supervisorAttendanceViewOpen, setSupervisorAttendanceViewOpen] = useState(false);
 
-  // Function to fetch assigned sites for a user - to be replaced with actual API call
+  // Function to fetch assigned sites for a user
   const fetchAssignedSites = async (userId: string): Promise<SiteAssignment[]> => {
     try {
-      // Replace with your actual API endpoint to fetch user's assigned sites
-      // const response = await axios.get(`${API_URL}/users/${userId}/sites`);
-      // return response.data;
-      
-      // Return empty array - no dummy data
       return [];
     } catch (error) {
       console.error('Error fetching assigned sites:', error);

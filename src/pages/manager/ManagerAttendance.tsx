@@ -1,3 +1,4 @@
+// ManagerAttendance.tsx
 import { useState, useEffect, useMemo } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
 import { DashboardHeader } from "@/components/shared/DashboardHeader";
@@ -41,7 +42,8 @@ import {
   UserCircle,
   LogIn,
   LogOut,
-  CalendarDays
+  CalendarDays,
+  Camera
 } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -53,6 +55,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import taskService, { Task } from "@/services/TaskService";
 import { siteService, Site } from "@/services/SiteService";
+import CameraCapture from "../supervisor/CameraCapture";
 
 // API Base URL
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5001/api`;
@@ -64,6 +67,8 @@ interface MyAttendanceRecord {
   day: string;
   checkIn: string;
   checkOut: string;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   status: "Present" | "Absent" | "Half Day" | "Late" | "Checked In" | "Weekly Off" | "Leave";
   totalHours: string;
   breakTime: string;
@@ -103,6 +108,8 @@ interface Employee {
   status: 'present' | 'absent' | 'leave' | 'weekly-off';
   checkInTime?: string;
   checkOutTime?: string;
+  checkInPhoto?: string;
+  checkOutPhoto?: string;
   site: string;
   siteName?: string;
   date: string;
@@ -133,6 +140,8 @@ interface AttendanceRecord {
   date: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -250,21 +259,12 @@ const getDayOfWeek = (dateStr: string): string => {
   return date.toLocaleDateString('en-US', { weekday: 'short' });
 };
 
-// Calculate days between dates
-const calculateDaysBetween = (startDate: string, endDate: string): number => {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  const timeDiff = end.getTime() - start.getTime();
-  const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-  return daysDiff + 1;
-};
-
 // Fetch employees from API
 const fetchEmployees = async (): Promise<Employee[]> => {
   try {
     console.log('🔄 Fetching employees from API...');
     
-    const response = await fetch(`${API_URL}/employees?limit=1000`); // Increased limit to get all employees
+    const response = await fetch(`${API_URL}/employees?limit=1000`);
     const data = await response.json();
     
     if (response.ok) {
@@ -323,7 +323,7 @@ const fetchEmployees = async (): Promise<Employee[]> => {
 const fetchAttendanceRecords = async (date: string): Promise<AttendanceRecord[]> => {
   try {
     console.log(`🔄 Fetching attendance records for date: ${date}`);
-    const response = await fetch(`${API_URL}/attendance?date=${date}&limit=1000`); // Increased limit
+    const response = await fetch(`${API_URL}/attendance?date=${date}&limit=1000`);
     if (response.ok) {
       const data = await response.json();
       if (data.success && Array.isArray(data.data)) {
@@ -334,6 +334,8 @@ const fetchAttendanceRecords = async (date: string): Promise<AttendanceRecord[]>
           date: record.date || date,
           checkInTime: record.checkInTime || null,
           checkOutTime: record.checkOutTime || null,
+          checkInPhoto: record.checkInPhoto || null,
+          checkOutPhoto: record.checkOutPhoto || null,
           breakStartTime: record.breakStartTime || null,
           breakEndTime: record.breakEndTime || null,
           totalHours: Number(record.totalHours) || 0,
@@ -351,42 +353,6 @@ const fetchAttendanceRecords = async (date: string): Promise<AttendanceRecord[]>
     return [];
   } catch (error) {
     console.error('Error fetching attendance:', error);
-    return [];
-  }
-};
-
-// Fetch attendance records for a date range
-const fetchAttendanceRecordsRange = async (startDate: string, endDate: string): Promise<AttendanceRecord[]> => {
-  try {
-    console.log(`🔄 Fetching attendance records from ${startDate} to ${endDate}`);
-    const response = await fetch(`${API_URL}/attendance/range?startDate=${startDate}&endDate=${endDate}&limit=1000`);
-    if (response.ok) {
-      const data = await response.json();
-      if (data.success && Array.isArray(data.data)) {
-        return data.data.map((record: any) => ({
-          _id: record._id || record.id,
-          employeeId: record.employeeId || '',
-          employeeName: record.employeeName || 'Unknown',
-          date: record.date || '',
-          checkInTime: record.checkInTime || null,
-          checkOutTime: record.checkOutTime || null,
-          breakStartTime: record.breakStartTime || null,
-          breakEndTime: record.breakEndTime || null,
-          totalHours: Number(record.totalHours) || 0,
-          breakTime: Number(record.breakTime) || 0,
-          status: (record.status?.toLowerCase() || 'absent') as any,
-          isCheckedIn: Boolean(record.isCheckedIn),
-          isOnBreak: Boolean(record.isOnBreak),
-          supervisorId: record.supervisorId,
-          remarks: record.remarks || '',
-          siteName: record.siteName || record.site || '',
-          department: record.department || ''
-        }));
-      }
-    }
-    return [];
-  } catch (error) {
-    console.error('Error fetching attendance range:', error);
     return [];
   }
 };
@@ -414,6 +380,8 @@ const generateEmployeeData = async (siteName: string, date: string): Promise<Emp
       let status: 'present' | 'absent' | 'leave' | 'weekly-off' = 'absent';
       let checkInTime = '-';
       let checkOutTime = '-';
+      let checkInPhoto = null;
+      let checkOutPhoto = null;
       let remark = '';
       let isOnBreak = false;
       let hasCheckedOutToday = false;
@@ -431,6 +399,8 @@ const generateEmployeeData = async (siteName: string, date: string): Promise<Emp
         
         checkInTime = attendance.checkInTime ? formatTimeForDisplay(attendance.checkInTime) : '-';
         checkOutTime = attendance.checkOutTime ? formatTimeForDisplay(attendance.checkOutTime) : '-';
+        checkInPhoto = attendance.checkInPhoto;
+        checkOutPhoto = attendance.checkOutPhoto;
         remark = attendance.remarks || '';
         isOnBreak = attendance.isOnBreak || false;
         hasCheckedOutToday = attendance.checkOutTime ? true : false;
@@ -441,6 +411,8 @@ const generateEmployeeData = async (siteName: string, date: string): Promise<Emp
         status,
         checkInTime,
         checkOutTime,
+        checkInPhoto: checkInPhoto || undefined,
+        checkOutPhoto: checkOutPhoto || undefined,
         date,
         remark,
         isOnBreak,
@@ -465,10 +437,9 @@ const calculateSiteAttendanceData = async (site: Site, date: string): Promise<Si
   const leave = employees.filter(emp => emp.status === 'leave').length;
   const absent = employees.filter(emp => emp.status === 'absent').length;
   
-  // FIXED: Don't add weeklyOff to present count
-  const totalPresent = present; // Changed from present + weeklyOff
+  const totalPresent = present;
   const totalRequired = employees.length;
-  const shortage = totalRequired - (totalPresent + weeklyOff + leave); // FIXED: Calculate shortage correctly
+  const shortage = totalRequired - (totalPresent + weeklyOff + leave);
   const attendanceRate = totalRequired > 0 ? Math.round((totalPresent / totalRequired) * 100) : 0;
   
   return {
@@ -509,6 +480,9 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
   const [loading, setLoading] = useState(false);
   const itemsPerPage = 20;
 
@@ -518,6 +492,14 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       setEmployees(siteData.employees);
     }
   }, [siteData?.employees]);
+
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhoto(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    }
+  };
 
   const allEmployees = employees;
   const presentEmployees = allEmployees.filter(emp => emp.status === 'present');
@@ -579,275 +561,334 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
   };
 
   return (
-    <div className="min-h-screen bg-background p-4 sm:p-6">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-6"
-      >
-        <div className="flex items-center gap-4 mb-4">
-          <Button variant="outline" size="sm" onClick={onBack}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Sites
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              {siteData.name} - Employee Details
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              {formatDateDisplay(selectedDate)} • {siteData.totalEmployees} employees
-              {siteData.clientName && ` • Client: ${siteData.clientName}`}
-            </p>
+    <>
+      <div className="min-h-screen bg-background p-4 sm:p-6">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6"
+        >
+          <div className="flex items-center gap-4 mb-4">
+            <Button variant="outline" size="sm" onClick={onBack}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Sites
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                {siteData.name} - Employee Details
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {formatDateDisplay(selectedDate)} • {siteData.totalEmployees} employees
+                {siteData.clientName && ` • Client: ${siteData.clientName}`}
+              </p>
+            </div>
           </div>
-        </div>
-      </motion.div>
+        </motion.div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6"
-      >
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-800">Total Employees</p>
-                <p className="text-2xl font-bold text-blue-600">{siteData.totalEmployees}</p>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6"
+        >
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-blue-800">Total Employees</p>
+                  <p className="text-2xl font-bold text-blue-600">{siteData.totalEmployees}</p>
+                </div>
+                <Users className="h-8 w-8 text-blue-600" />
               </div>
-              <Users className="h-8 w-8 text-blue-600" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card className="bg-green-50 border-green-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-green-800">Present</p>
-                <p className="text-2xl font-bold text-green-600">{siteData.present}</p>
+          <Card className="bg-green-50 border-green-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-800">Present</p>
+                  <p className="text-2xl font-bold text-green-600">{siteData.present}</p>
+                </div>
+                <UserCheck className="h-8 w-8 text-green-600" />
               </div>
-              <UserCheck className="h-8 w-8 text-green-600" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card className="bg-purple-50 border-purple-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-purple-800">Weekly Off</p>
-                <p className="text-2xl font-bold text-purple-600">{siteData.weeklyOff}</p>
+          <Card className="bg-purple-50 border-purple-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-purple-800">Weekly Off</p>
+                  <p className="text-2xl font-bold text-purple-600">{siteData.weeklyOff}</p>
+                </div>
+                <Calendar className="h-8 w-8 text-purple-600" />
               </div>
-              <Calendar className="h-8 w-8 text-purple-600" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-800">Leave</p>
-                <p className="text-2xl font-bold text-blue-600">{siteData.leave}</p>
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-blue-800">Leave</p>
+                  <p className="text-2xl font-bold text-blue-600">{siteData.leave}</p>
+                </div>
+                <Clock className="h-8 w-8 text-blue-600" />
               </div>
-              <Clock className="h-8 w-8 text-blue-600" />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-red-800">Absent</p>
-                <p className="text-2xl font-bold text-red-600">{siteData.absent}</p>
+          <Card className="bg-red-50 border-red-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-red-800">Absent</p>
+                  <p className="text-2xl font-bold text-red-600">{siteData.absent}</p>
+                </div>
+                <XCircle className="h-8 w-8 text-red-600" />
               </div>
-              <XCircle className="h-8 w-8 text-red-600" />
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        className="mb-6"
-      >
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-              <div className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg">
-                <Button
-                  variant={activeTab === 'all' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => { setActiveTab('all'); setCurrentPage(1); }}
-                >
-                  All ({allEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'present' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => { setActiveTab('present'); setCurrentPage(1); }}
-                >
-                  Present ({presentEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'weekly-off' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => { setActiveTab('weekly-off'); setCurrentPage(1); }}
-                >
-                  Weekly Off ({weeklyOffEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'leave' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => { setActiveTab('leave'); setCurrentPage(1); }}
-                >
-                  Leave ({leaveEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'absent' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => { setActiveTab('absent'); setCurrentPage(1); }}
-                >
-                  Absent ({absentEmployees.length})
-                </Button>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="mb-6"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                <div className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg">
+                  <Button
+                    variant={activeTab === 'all' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('all'); setCurrentPage(1); }}
+                  >
+                    All ({allEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'present' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('present'); setCurrentPage(1); }}
+                  >
+                    Present ({presentEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'weekly-off' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('weekly-off'); setCurrentPage(1); }}
+                  >
+                    Weekly Off ({weeklyOffEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'leave' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('leave'); setCurrentPage(1); }}
+                  >
+                    Leave ({leaveEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'absent' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('absent'); setCurrentPage(1); }}
+                  >
+                    Absent ({absentEmployees.length})
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2 w-full lg:w-auto">
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search employees..."
+                    value={employeeSearch}
+                    onChange={(e) => { setEmployeeSearch(e.target.value); setCurrentPage(1); }}
+                    className="w-full lg:w-64"
+                  />
+                </div>
               </div>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-              <div className="flex items-center gap-2 w-full lg:w-auto">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search employees..."
-                  value={employeeSearch}
-                  onChange={(e) => { setEmployeeSearch(e.target.value); setCurrentPage(1); }}
-                  className="w-full lg:w-64"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-      >
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              Employee Details - {filteredEmployees.length} employees found
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-md border">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="h-12 px-4 text-left font-medium">Employee ID</th>
-                      <th className="h-12 px-4 text-left font-medium">Name</th>
-                      <th className="h-12 px-4 text-left font-medium">Department</th>
-                      <th className="h-12 px-4 text-left font-medium">Position</th>
-                      <th className="h-12 px-4 text-left font-medium">Status</th>
-                      <th className="h-12 px-4 text-left font-medium">Check In</th>
-                      <th className="h-12 px-4 text-left font-medium">Check Out</th>
-                      <th className="h-12 px-4 text-left font-medium">Contact</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedEmployees.length > 0 ? (
-                      paginatedEmployees.map((employee) => (
-                        <tr key={employee.id} className="border-b hover:bg-muted/50">
-                          <td className="p-4 align-middle font-mono text-xs">
-                            {employee.employeeId || employee.id}
-                          </td>
-                          <td className="p-4 align-middle">
-                            <div className="font-medium">{employee.name}</div>
-                          </td>
-                          <td className="p-4 align-middle">
-                            <Badge variant="outline">{employee.department}</Badge>
-                          </td>
-                          <td className="p-4 align-middle">{employee.position}</td>
-                          <td className="p-4 align-middle">
-                            <Badge className={getStatusBadge(employee.status)}>
-                              {employee.status === 'weekly-off' ? 'Weekly Off' : 
-                               employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
-                              {employee.isOnBreak && <span className="ml-1 text-xs">(Break)</span>}
-                            </Badge>
-                          </td>
-                          <td className="p-4 align-middle">
-                            <div className="flex items-center gap-1">
-                              <Clock className="h-3 w-3 text-muted-foreground" />
-                              {employee.checkInTime || '-'}
-                            </div>
-                          </td>
-                          <td className="p-4 align-middle">
-                            <div className="flex items-center gap-1">
-                              <Clock className="h-3 w-3 text-muted-foreground" />
-                              {employee.checkOutTime || '-'}
-                            </div>
-                          </td>
-                          <td className="p-4 align-middle">
-                            <div className="space-y-1">
-                              {employee.email && (
-                                <div className="flex items-center gap-1 text-xs">
-                                  <Mail className="h-3 w-3" />
-                                  {employee.email}
-                                </div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Employee Details - {filteredEmployees.length} employees found
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="h-12 px-4 text-left font-medium">Employee ID</th>
+                        <th className="h-12 px-4 text-left font-medium">Name</th>
+                        <th className="h-12 px-4 text-left font-medium">Department</th>
+                        <th className="h-12 px-4 text-left font-medium">Position</th>
+                        <th className="h-12 px-4 text-left font-medium">Status</th>
+                        <th className="h-12 px-4 text-left font-medium">Check In</th>
+                        <th className="h-12 px-4 text-left font-medium">Check Out</th>
+                        <th className="h-12 px-4 text-left font-medium">Check In Photo</th>
+                        <th className="h-12 px-4 text-left font-medium">Check Out Photo</th>
+                        <th className="h-12 px-4 text-left font-medium">Contact</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedEmployees.length > 0 ? (
+                        paginatedEmployees.map((employee) => (
+                          <tr key={employee.id} className="border-b hover:bg-muted/50">
+                            <td className="p-4 align-middle font-mono text-xs">
+                              {employee.employeeId || employee.id}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="font-medium">{employee.name}</div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Badge variant="outline">{employee.department}</Badge>
+                            </td>
+                            <td className="p-4 align-middle">{employee.position}</td>
+                            <td className="p-4 align-middle">
+                              <Badge className={getStatusBadge(employee.status)}>
+                                {employee.status === 'weekly-off' ? 'Weekly Off' : 
+                                 employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
+                                {employee.isOnBreak && <span className="ml-1 text-xs">(Break)</span>}
+                              </Badge>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="flex items-center gap-1">
+                                <Clock className="h-3 w-3 text-muted-foreground" />
+                                {employee.checkInTime || '-'}
+                              </div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="flex items-center gap-1">
+                                <Clock className="h-3 w-3 text-muted-foreground" />
+                                {employee.checkOutTime || '-'}
+                              </div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkInPhoto ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleViewPhoto(employee.checkInPhoto, 'checkin')}
+                                  className="h-8 px-2"
+                                >
+                                  <Camera className="h-4 w-4 mr-1" />
+                                  View
+                                </Button>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
                               )}
-                              {employee.phone && (
-                                <div className="flex items-center gap-1 text-xs">
-                                  <Phone className="h-3 w-3" />
-                                  {employee.phone}
-                                </div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkOutPhoto ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleViewPhoto(employee.checkOutPhoto, 'checkout')}
+                                  className="h-8 px-2"
+                                >
+                                  <Camera className="h-4 w-4 mr-1" />
+                                  View
+                                </Button>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
                               )}
-                            </div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="space-y-1">
+                                {employee.email && (
+                                  <div className="flex items-center gap-1 text-xs">
+                                    <Mail className="h-3 w-3" />
+                                    {employee.email}
+                                  </div>
+                                )}
+                                {employee.phone && (
+                                  <div className="flex items-center gap-1 text-xs">
+                                    <Phone className="h-3 w-3" />
+                                    {employee.phone}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={10} className="p-8 text-center text-muted-foreground">
+                            No employees found for the selected filters.
                           </td>
                         </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={8} className="p-8 text-center text-muted-foreground">
-                          No employees found for the selected filters.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {filteredEmployees.length > 0 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
-                  <div className="text-sm text-muted-foreground">
-                    Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="sm" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
-                      First
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
-                      Previous
-                    </Button>
-                    <span className="text-sm">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                    <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalPages}>
-                      Next
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>
-                      Last
-                    </Button>
-                  </div>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
+
+                {filteredEmployees.length > 0 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                    <div className="text-sm text-muted-foreground">
+                      Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
+                        First
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
+                        Previous
+                      </Button>
+                      <span className="text-sm">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalPages}>
+                        Next
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>
+                        Last
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+
+      {/* Photo Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhoto && (
+              <img
+                src={selectedPhoto}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg"
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
@@ -855,6 +896,16 @@ const ManagerAttendance = () => {
   const { onMenuClick } = useOutletContext<{ onMenuClick: () => void }>();
   const navigate = useNavigate();
   const { user: authUser, isAuthenticated } = useRole();
+  
+  // Camera states
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraAction, setCameraAction] = useState<'checkin' | 'checkout' | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  
+  // Photo modal for viewing
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
   
   // Current user state
   const [managerId, setManagerId] = useState<string>('');
@@ -945,6 +996,58 @@ const ManagerAttendance = () => {
     fetchCurrentUser();
   }, [authUser]);
 
+  // Handle photo capture for manager
+  const handlePhotoCapture = async (photoFile: File) => {
+    if (!cameraAction || !managerId) return;
+    
+    setUploadingPhoto(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('photo', photoFile);
+      formData.append('managerId', managerId);
+      formData.append('managerName', managerName);
+      
+      const endpoint = cameraAction === 'checkin' 
+        ? `${API_URL}/manager-attendance/checkin-with-photo`
+        : `${API_URL}/manager-attendance/checkout-with-photo`;
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        toast.success(`Successfully ${cameraAction === 'checkin' ? 'checked in' : 'checked out'} with photo!`);
+        
+        // Refresh data
+        await fetchMyAttendanceData();
+        await fetchCurrentStatus();
+        
+        setCameraOpen(false);
+        setCameraAction(null);
+      } else {
+        toast.error(data.message || `Error ${cameraAction === 'checkin' ? 'checking in' : 'checking out'}`);
+      }
+    } catch (error: any) {
+      console.error('Photo attendance error:', error);
+      toast.error(`Failed to ${cameraAction === 'checkin' ? 'check in' : 'check out'}: ${error.message}`);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  // Handle view photo
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhotoUrl(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    }
+  };
+
   // Fetch manager's own attendance data for a specific month
   const fetchMyAttendanceData = async () => {
     if (!managerId) return;
@@ -975,6 +1078,8 @@ const ManagerAttendance = () => {
             day: record.day,
             checkIn: record.checkIn || "-",
             checkOut: record.checkOut || "-",
+            checkInPhoto: record.checkInPhoto || null,
+            checkOutPhoto: record.checkOutPhoto || null,
             status: record.status,
             totalHours: record.totalHours || "0.0",
             breakTime: record.breakTime || "0.0",
@@ -1031,7 +1136,6 @@ const ManagerAttendance = () => {
         taskService.getAllTasks()
       ]);
 
-      // Filter sites where manager is assigned (based on tasks)
       const managerSites = allSites.filter(site => {
         const siteTasks = allTasks.filter(task => task.siteId === site._id);
         
@@ -1047,7 +1151,6 @@ const ManagerAttendance = () => {
       setSites(managerSites);
       console.log(`Found ${managerSites.length} sites for manager`);
 
-      // Calculate attendance data for each site for the selected date
       await calculateSiteData(managerSites, selectedDate);
       
     } catch (error: any) {
@@ -1084,6 +1187,8 @@ const ManagerAttendance = () => {
 
   // Fetch current attendance status
   const fetchCurrentStatus = async () => {
+    if (!managerId) return;
+    
     try {
       const response = await fetch(`${API_URL}/manager-attendance/today/${managerId}`);
       if (response.ok) {
@@ -1332,46 +1437,22 @@ const ManagerAttendance = () => {
     }
   };
 
-  const handleCheckIn = async () => {
-    try {
-      const response = await fetch(`${API_URL}/manager-attendance/checkin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ managerId, managerName })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        toast.success("Checked in successfully!");
-        fetchCurrentStatus();
-        fetchMyAttendanceData();
-      } else {
-        toast.error(data.message || "Failed to check in");
-      }
-    } catch (error) {
-      toast.error("Failed to check in");
+  const handleCheckIn = () => {
+    if (!managerId) {
+      toast.error("Manager ID not found");
+      return;
     }
+    setCameraAction('checkin');
+    setCameraOpen(true);
   };
 
-  const handleCheckOut = async () => {
-    try {
-      const response = await fetch(`${API_URL}/manager-attendance/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ managerId })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        toast.success("Checked out successfully!");
-        fetchCurrentStatus();
-        fetchMyAttendanceData();
-      } else {
-        toast.error(data.message || "Failed to check out");
-      }
-    } catch (error) {
-      toast.error("Failed to check out");
+  const handleCheckOut = () => {
+    if (!managerId) {
+      toast.error("Manager ID not found");
+      return;
     }
+    setCameraAction('checkout');
+    setCameraOpen(true);
   };
 
   // Get status badge color for team attendance
@@ -1553,6 +1634,17 @@ const ManagerAttendance = () => {
                             : '--:--'}
                         </span>
                       </div>
+                      {currentStatus.checkInPhoto && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewPhoto(currentStatus.checkInPhoto, 'checkin')}
+                          className="h-6 px-2 text-xs"
+                        >
+                          <Camera className="h-3 w-3 mr-1" />
+                          View Photo
+                        </Button>
+                      )}
                     </div>
                     
                     <div className="space-y-2">
@@ -1582,13 +1674,13 @@ const ManagerAttendance = () => {
                               </Button>
                             )}
                             <Button size="sm" onClick={handleCheckOut} variant="outline">
-                              <LogOut className="h-3 w-3 mr-1" />
+                              <Camera className="h-3 w-3 mr-1" />
                               Check Out
                             </Button>
                           </>
                         ) : !currentStatus.hasCheckedOutToday ? (
                           <Button size="sm" onClick={handleCheckIn}>
-                            <LogIn className="h-3 w-3 mr-1" />
+                            <Camera className="h-3 w-3 mr-1" />
                             Check In
                           </Button>
                         ) : (
@@ -1736,6 +1828,8 @@ const ManagerAttendance = () => {
                           <TableHead>Day</TableHead>
                           <TableHead>Check In</TableHead>
                           <TableHead>Check Out</TableHead>
+                          <TableHead>Check In Photo</TableHead>
+                          <TableHead>Check Out Photo</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Total Hours</TableHead>
                           <TableHead>Break Time</TableHead>
@@ -1769,6 +1863,36 @@ const ManagerAttendance = () => {
                                 </div>
                               </TableCell>
                               <TableCell>
+                                {record.checkInPhoto ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleViewPhoto(record.checkInPhoto, 'checkin')}
+                                    className="h-8 px-2"
+                                  >
+                                    <Camera className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {record.checkOutPhoto ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleViewPhoto(record.checkOutPhoto, 'checkout')}
+                                    className="h-8 px-2"
+                                  >
+                                    <Camera className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                ) : (
+                                  <span className="text-muted-foreground text-sm">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
                                 <Badge variant="outline" className={getMyStatusBadge(record.status)}>
                                   <span className="flex items-center gap-1">
                                     {getMyStatusIcon(record.status)}
@@ -1798,7 +1922,7 @@ const ManagerAttendance = () => {
                           ))
                         ) : (
                           <TableRow>
-                            <TableCell colSpan={9} className="text-center py-8">
+                            <TableCell colSpan={11} className="text-center py-8">
                               <Calendar className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                               <h3 className="text-lg font-medium">No records found</h3>
                               <p className="text-muted-foreground mt-2">
@@ -2045,7 +2169,7 @@ const ManagerAttendance = () => {
                               <th className="h-12 px-4 text-left font-medium">Rate</th>
                               <th className="h-12 px-4 text-left font-medium">Status</th>
                               <th className="h-12 px-4 text-left font-medium">Actions</th>
-                            </tr>
+                             </tr>
                           </thead>
                           <tbody>
                             {paginatedSites.map((site) => {
@@ -2062,14 +2186,14 @@ const ManagerAttendance = () => {
                                         Real Data
                                       </Badge>
                                     )}
-                                  </td>
+                                   </td>
                                   <td className="p-4 align-middle">{site.clientName || '-'}</td>
                                   <td className="p-4 align-middle">
                                     <div className="flex items-center gap-1">
                                       <MapPin className="h-3 w-3 text-muted-foreground" />
                                       {site.location || '-'}
                                     </div>
-                                  </td>
+                                   </td>
                                   <td className="p-4 align-middle font-bold">{site.totalEmployees}</td>
                                   <td className="p-4 align-middle font-bold text-green-700 bg-green-50">{site.present}</td>
                                   <td className="p-4 align-middle font-bold text-purple-700 bg-purple-50">{site.weeklyOff}</td>
@@ -2081,14 +2205,14 @@ const ManagerAttendance = () => {
                                     <Badge className={getStatusBadge(status)}>
                                       {status}
                                     </Badge>
-                                  </td>
+                                   </td>
                                   <td className="p-4 align-middle">
                                     <Button variant="outline" size="sm" onClick={() => handleViewDetails(site)}>
                                       <Eye className="h-4 w-4 mr-1" />
                                       View
                                     </Button>
-                                  </td>
-                                </tr>
+                                   </td>
+                                 </tr>
                               );
                             })}
                           </tbody>
@@ -2128,6 +2252,43 @@ const ManagerAttendance = () => {
           </TabsContent>
         </Tabs>
       </motion.div>
+
+      {/* Photo View Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhotoUrl && (
+              <img
+                src={selectedPhotoUrl}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg"
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Camera Capture Dialog */}
+      <CameraCapture
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onCapture={handlePhotoCapture}
+        title={cameraAction === 'checkin' ? "Take Check-in Photo" : "Take Check-out Photo"}
+        description={cameraAction === 'checkin' 
+          ? "Take a photo to verify your check-in time. This photo will be stored securely." 
+          : "Take a photo to verify your check-out time. This photo will be stored securely."}
+        actionLabel={cameraAction === 'checkin' ? "Use for Check-in" : "Use for Check-out"}
+      />
     </div>
   );
 };

@@ -1,3 +1,4 @@
+// services/TaskService.ts
 export interface Site {
   _id: string;
   name: string;
@@ -54,7 +55,7 @@ export interface Task {
   _id: string;
   title: string;
   description: string;
-  assignedUsers: AssignedUser[]; // Changed from single assignee to array
+  assignedUsers: AssignedUser[];
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   deadline: string;
@@ -67,14 +68,14 @@ export interface Task {
   hourlyUpdates: HourlyUpdate[];
   createdAt: string;
   updatedAt: string;
-  assignedTo?: string; // For backward compatibility
-  assignedToName?: string; // For backward compatibility
+  assignedTo?: string;
+  assignedToName?: string;
 }
 
 export interface CreateTaskRequest {
   title: string;
   description: string;
-  assignedUsers: AssignedUser[]; // Changed from single assignee to array
+  assignedUsers: AssignedUser[];
   priority: 'high' | 'medium' | 'low';
   status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   deadline: string;
@@ -96,10 +97,10 @@ export interface CreateMultipleTasksRequest {
 export interface UpdateTaskRequest {
   title?: string;
   description?: string;
-  assignedUsers?: AssignedUser[]; // Full replacement
-  addAssignees?: AssignedUser[];   // Add new assignees
-  removeAssignees?: string[];       // Remove by userId
-  replaceAssignee?: {               // Replace one with another
+  assignedUsers?: AssignedUser[];
+  addAssignees?: AssignedUser[];
+  removeAssignees?: string[];
+  replaceAssignee?: {
     oldUserId: string;
     newUser: AssignedUser;
   };
@@ -116,7 +117,7 @@ export interface UpdateTaskRequest {
 
 export interface UpdateTaskStatusRequest {
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  userId?: string; // Optional: for updating individual user's status
+  userId?: string;
 }
 
 export interface AddHourlyUpdateRequest {
@@ -157,6 +158,31 @@ export interface TaskStats {
   }>;
 }
 
+export interface StaffMember {
+  _id: string;
+  userId: string;
+  name: string;
+  email: string;
+  role: 'manager' | 'supervisor' | 'employee';
+  phone?: string;
+  siteId?: string;
+  siteName?: string;
+  isActive: boolean;
+}
+
+export interface SiteStaff {
+  siteId: string;
+  siteName: string;
+  managers: StaffMember[];
+  supervisors: StaffMember[];
+}
+
+export interface StaffWithTaskCount {
+  userId: string;
+  name: string;
+  taskCount: number;
+}
+
 const API_URL = `http://${window.location.hostname}:5001/api`;
 
 class TaskService {
@@ -169,7 +195,6 @@ class TaskService {
       }
       const data = await response.json();
       
-      // Ensure all sites have managerCount and supervisorCount
       const sites = Array.isArray(data) ? data : [];
       return sites.map((site: any) => ({
         ...site,
@@ -201,6 +226,65 @@ class TaskService {
     } catch (error) {
       console.error(`Error fetching site ${siteId}:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Get sites assigned to a specific manager
+   */
+  async getManagerAssignedSites(managerId: string): Promise<ExtendedSite[]> {
+    try {
+      console.log(`🔍 Fetching sites assigned to manager: ${managerId}`);
+      
+      // First, get all sites
+      const allSites = await this.getAllSites();
+      
+      // Then, get all tasks to find which sites this manager is assigned to
+      const allTasks = await this.getAllTasks();
+      
+      // Get unique site IDs where this manager is assigned
+      const assignedSiteIds = new Set<string>();
+      
+      allTasks.forEach(task => {
+        // Check if manager is assigned to this task
+        const isManagerAssigned = task.assignedUsers?.some(
+          user => user.role === 'manager' && user.userId === managerId
+        );
+        
+        if (isManagerAssigned && task.siteId) {
+          assignedSiteIds.add(task.siteId);
+        }
+      });
+      
+      console.log(`📋 Found ${assignedSiteIds.size} site IDs where manager is assigned:`, Array.from(assignedSiteIds));
+      
+      // Filter sites to only those where manager is assigned
+      const assignedSites = allSites.filter(site => 
+        assignedSiteIds.has(site._id)
+      );
+      
+      console.log(`✅ Found ${assignedSites.length} assigned sites for manager ${managerId}`);
+      return assignedSites;
+    } catch (error) {
+      console.error('Error fetching manager assigned sites:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get all supervisors from a specific site
+   */
+  async getSupervisorsBySite(siteId: string): Promise<StaffWithTaskCount[]> {
+    try {
+      console.log(`📋 Fetching supervisors for site ${siteId}...`);
+      
+      const staffData = await this.getSiteStaffWithCounts(siteId);
+      
+      console.log(`✅ Found ${staffData.supervisors.length} supervisors for site ${siteId}`);
+      return staffData.supervisors;
+    } catch (error) {
+      console.error(`❌ Error fetching supervisors for site ${siteId}:`, error);
+      return [];
     }
   }
 
@@ -273,46 +357,43 @@ class TaskService {
     }
   }
 
- // In TaskService.ts, update the createMultipleTasks method (around line 278)
-
-async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]> {
-  try {
-    console.log('📝 CREATE MULTIPLE TASKS - Request:', JSON.stringify(tasksData, null, 2));
-    
-    const response = await fetch(`${API_URL}/tasks/multiple`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(tasksData),
-    });
-    
-    const responseText = await response.text();
-    console.log('📨 Response status:', response.status);
-    console.log('📨 Response body:', responseText);
-    
-    if (!response.ok) {
-      let errorData;
-      try {
-        errorData = JSON.parse(responseText);
-      } catch {
-        errorData = { message: responseText || `Failed to create tasks: ${response.status}` };
+  async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]> {
+    try {
+      console.log('📝 CREATE MULTIPLE TASKS - Request:', JSON.stringify(tasksData, null, 2));
+      
+      const response = await fetch(`${API_URL}/tasks/multiple`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(tasksData),
+      });
+      
+      const responseText = await response.text();
+      console.log('📨 Response status:', response.status);
+      console.log('📨 Response body:', responseText);
+      
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = JSON.parse(responseText);
+        } catch {
+          errorData = { message: responseText || `Failed to create tasks: ${response.status}` };
+        }
+        console.error('❌ Server error response:', errorData);
+        throw new Error(errorData.message || `Failed to create tasks: ${response.status}`);
       }
-      console.error('❌ Server error response:', errorData);
-      throw new Error(errorData.message || `Failed to create tasks: ${response.status}`);
+      
+      const result = JSON.parse(responseText);
+      console.log('✅ Tasks created successfully:', result);
+      return result.tasks || result;
+      
+    } catch (error) {
+      console.error('❌ Error creating multiple tasks:', error);
+      throw error;
     }
-    
-    const result = JSON.parse(responseText);
-    console.log('✅ Tasks created successfully:', result);
-    return result.tasks || result;
-    
-  } catch (error) {
-    console.error('❌ Error creating multiple tasks:', error);
-    throw error;
   }
-}
 
-  // UPDATE TASK - ENHANCED with all edit capabilities
   async updateTask(taskId: string, updateData: UpdateTaskRequest): Promise<Task> {
     try {
       console.log(`🔄 Updating task ${taskId}:`, JSON.stringify(updateData, null, 2));
@@ -340,7 +421,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Add assignees to existing task
   async addAssigneesToTask(taskId: string, assignees: AssignedUser[]): Promise<Task> {
     try {
       console.log(`➕ Adding assignees to task ${taskId}:`, assignees);
@@ -368,7 +448,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Remove assignees from task
   async removeAssigneesFromTask(taskId: string, userIds: string[]): Promise<Task> {
     try {
       console.log(`➖ Removing assignees from task ${taskId}:`, userIds);
@@ -396,7 +475,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Replace assignee in task
   async replaceAssigneeInTask(taskId: string, oldUserId: string, newUser: AssignedUser): Promise<Task> {
     try {
       console.log(`🔄 Replacing assignee in task ${taskId}:`, { oldUserId, newUser });
@@ -462,7 +540,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Assignees
   async getAllAssignees(): Promise<Assignee[]> {
     try {
       const response = await fetch(`${API_URL}/tasks/assignees`);
@@ -491,12 +568,10 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Get all assigned supervisors (supervisors who are already assigned to tasks)
   async getAssignedSupervisors(): Promise<string[]> {
     try {
       const tasks = await this.getAllTasks();
       
-      // Get unique supervisor IDs from assigned tasks
       const assignedSupervisorIds = new Set<string>();
       
       tasks.forEach(task => {
@@ -514,16 +589,13 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Get supervisors assigned to specific sites
-  async getSupervisorsBySite(): Promise<Map<string, Set<string>>> {
+  async getSupervisorsBySiteOld(): Promise<Map<string, Set<string>>> {
     try {
       const response = await fetch(`${API_URL}/tasks/supervisors-by-site`);
       
       if (!response.ok) {
-        // Fallback to manual calculation
         const tasks = await this.getAllTasks();
         
-        // Map siteId -> Set of supervisor IDs
         const siteToSupervisors = new Map<string, Set<string>>();
         
         tasks.forEach(task => {
@@ -542,7 +614,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
       
       const data = await response.json();
       
-      // Convert plain object to Map
       const siteToSupervisors = new Map<string, Set<string>>();
       Object.entries(data).forEach(([siteId, supervisorIds]) => {
         siteToSupervisors.set(siteId, new Set(supervisorIds as string[]));
@@ -555,7 +626,232 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Hourly Updates
+  async getSiteStaffWithCounts(siteId: string): Promise<{ 
+    managers: StaffWithTaskCount[],
+    supervisors: StaffWithTaskCount[]
+  }> {
+    try {
+      console.log(`📋 Fetching staff with task counts for site ${siteId}...`);
+      
+      const tasks = await this.getAllTasks();
+      
+      const managerMap = new Map<string, StaffWithTaskCount>();
+      const supervisorMap = new Map<string, StaffWithTaskCount>();
+      
+      tasks.forEach(task => {
+        if (task.siteId === siteId) {
+          task.assignedUsers?.forEach(user => {
+            if (user.role === 'manager') {
+              const existing = managerMap.get(user.userId);
+              if (existing) {
+                existing.taskCount += 1;
+              } else {
+                managerMap.set(user.userId, { 
+                  userId: user.userId,
+                  name: user.name, 
+                  taskCount: 1 
+                });
+              }
+            } else if (user.role === 'supervisor') {
+              const existing = supervisorMap.get(user.userId);
+              if (existing) {
+                existing.taskCount += 1;
+              } else {
+                supervisorMap.set(user.userId, { 
+                  userId: user.userId,
+                  name: user.name, 
+                  taskCount: 1 
+                });
+              }
+            }
+          });
+        }
+      });
+      
+      const managers = Array.from(managerMap.values());
+      const supervisors = Array.from(supervisorMap.values());
+      
+      console.log(`✅ Found ${managers.length} managers and ${supervisors.length} supervisors for site ${siteId}`);
+      
+      return { managers, supervisors };
+    } catch (error) {
+      console.error(`❌ Error fetching staff counts for site ${siteId}:`, error);
+      return { managers: [], supervisors: [] };
+    }
+  }
+
+  async getStaffBySite(): Promise<SiteStaff[]> {
+    try {
+      console.log('📋 Fetching staff grouped by site...');
+      
+      const tasks = await this.getAllTasks();
+      
+      const siteStaffMap = new Map<string, SiteStaff>();
+      
+      tasks.forEach(task => {
+        if (!task.siteId) return;
+        
+        if (!siteStaffMap.has(task.siteId)) {
+          siteStaffMap.set(task.siteId, {
+            siteId: task.siteId,
+            siteName: task.siteName || 'Unknown Site',
+            managers: [],
+            supervisors: []
+          });
+        }
+        
+        const siteStaff = siteStaffMap.get(task.siteId)!;
+        
+        task.assignedUsers?.forEach(user => {
+          if (user.role === 'manager') {
+            const exists = siteStaff.managers.some(m => m.userId === user.userId);
+            if (!exists) {
+              siteStaff.managers.push({
+                _id: user.userId,
+                userId: user.userId,
+                name: user.name,
+                email: user.email || '',
+                role: 'manager',
+                siteId: task.siteId,
+                siteName: task.siteName,
+                isActive: true
+              });
+            }
+          } else if (user.role === 'supervisor') {
+            const exists = siteStaff.supervisors.some(s => s.userId === user.userId);
+            if (!exists) {
+              siteStaff.supervisors.push({
+                _id: user.userId,
+                userId: user.userId,
+                name: user.name,
+                email: user.email || '',
+                role: 'supervisor',
+                siteId: task.siteId,
+                siteName: task.siteName,
+                isActive: true
+              });
+            }
+          }
+        });
+      });
+      
+      return Array.from(siteStaffMap.values());
+    } catch (error) {
+      console.error('❌ Error fetching staff by site:', error);
+      return [];
+    }
+  }
+
+  async getAllManagers(): Promise<StaffMember[]> {
+    try {
+      console.log('📋 Fetching all managers from tasks...');
+      
+      const tasks = await this.getAllTasks();
+      const managerMap = new Map<string, StaffMember>();
+      
+      tasks.forEach(task => {
+        task.assignedUsers?.forEach(user => {
+          if (user.role === 'manager' && !managerMap.has(user.userId)) {
+            managerMap.set(user.userId, {
+              _id: user.userId,
+              userId: user.userId,
+              name: user.name,
+              email: user.email || '',
+              role: 'manager',
+              siteId: task.siteId,
+              siteName: task.siteName,
+              isActive: true
+            });
+          }
+        });
+      });
+      
+      return Array.from(managerMap.values());
+    } catch (error) {
+      console.error('❌ Error fetching managers:', error);
+      return [];
+    }
+  }
+
+  async getAllSupervisors(): Promise<StaffMember[]> {
+    try {
+      console.log('📋 Fetching all supervisors from tasks...');
+      
+      const tasks = await this.getAllTasks();
+      const supervisorMap = new Map<string, StaffMember>();
+      
+      tasks.forEach(task => {
+        task.assignedUsers?.forEach(user => {
+          if (user.role === 'supervisor' && !supervisorMap.has(user.userId)) {
+            supervisorMap.set(user.userId, {
+              _id: user.userId,
+              userId: user.userId,
+              name: user.name,
+              email: user.email || '',
+              role: 'supervisor',
+              siteId: task.siteId,
+              siteName: task.siteName,
+              isActive: true
+            });
+          }
+        });
+      });
+      
+      return Array.from(supervisorMap.values());
+    } catch (error) {
+      console.error('❌ Error fetching supervisors:', error);
+      return [];
+    }
+  }
+
+  async getStaffForSite(siteId: string): Promise<{ managers: StaffMember[], supervisors: StaffMember[] }> {
+    try {
+      console.log(`📋 Fetching staff for site ${siteId}...`);
+      
+      const tasks = await this.getAllTasks();
+      const managerMap = new Map<string, StaffMember>();
+      const supervisorMap = new Map<string, StaffMember>();
+      
+      tasks.forEach(task => {
+        if (task.siteId === siteId) {
+          task.assignedUsers?.forEach(user => {
+            if (user.role === 'manager' && !managerMap.has(user.userId)) {
+              managerMap.set(user.userId, {
+                _id: user.userId,
+                userId: user.userId,
+                name: user.name,
+                email: user.email || '',
+                role: 'manager',
+                siteId: task.siteId,
+                siteName: task.siteName,
+                isActive: true
+              });
+            } else if (user.role === 'supervisor' && !supervisorMap.has(user.userId)) {
+              supervisorMap.set(user.userId, {
+                _id: user.userId,
+                userId: user.userId,
+                name: user.name,
+                email: user.email || '',
+                role: 'supervisor',
+                siteId: task.siteId,
+                siteName: task.siteName,
+                isActive: true
+              });
+            }
+          });
+        }
+      });
+      
+      return {
+        managers: Array.from(managerMap.values()),
+        supervisors: Array.from(supervisorMap.values())
+      };
+    } catch (error) {
+      console.error(`❌ Error fetching staff for site ${siteId}:`, error);
+      return { managers: [], supervisors: [] };
+    }
+  }
+
   async getTaskHourlyUpdates(taskId: string): Promise<HourlyUpdate[]> {
     try {
       const response = await fetch(`${API_URL}/tasks/${taskId}/hourly-updates`);
@@ -608,7 +904,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Attachments
   async getTaskAttachments(taskId: string): Promise<Attachment[]> {
     try {
       const response = await fetch(`${API_URL}/tasks/${taskId}/attachments`);
@@ -685,7 +980,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Statistics
   async getTaskStatistics(): Promise<TaskStats> {
     try {
       const response = await fetch(`${API_URL}/tasks/stats`);
@@ -712,13 +1006,11 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
   
-  // Task filtering methods
   async getTasksByAssignee(assigneeId: string): Promise<Task[]> {
     try {
       const response = await fetch(`${API_URL}/tasks/assignee/${assigneeId}`);
       if (!response.ok) {
         if (response.status === 404) {
-          // If endpoint doesn't exist, fall back to filtering from all tasks
           console.log("Endpoint /tasks/assignee/:id not found, filtering from all tasks");
           const allTasks = await this.getAllTasks();
           return allTasks.filter(task => 
@@ -737,11 +1029,9 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
 
   async getTasksByCreator(creatorId: string): Promise<Task[]> {
     try {
-      // Try dedicated endpoint first
       const response = await fetch(`${API_URL}/tasks/creator/${creatorId}`);
       if (!response.ok) {
         if (response.status === 404) {
-          // Fallback to filtering from all tasks
           const allTasks = await this.getAllTasks();
           return allTasks.filter(task => 
             task.createdBy === creatorId || task.createdBy === creatorId
@@ -759,11 +1049,9 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
 
   async getTasksBySite(siteName: string): Promise<Task[]> {
     try {
-      // Try dedicated endpoint first
       const response = await fetch(`${API_URL}/tasks/site/${encodeURIComponent(siteName)}`);
       if (!response.ok) {
         if (response.status === 404) {
-          // Fallback to filtering from all tasks
           const allTasks = await this.getAllTasks();
           return allTasks.filter(task => task.siteName === siteName);
         }
@@ -777,7 +1065,6 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     }
   }
 
-  // Utility Methods
   async downloadAttachment(attachment: Attachment): Promise<void> {
     try {
       const response = await fetch(attachment.url);
@@ -839,33 +1126,27 @@ async createMultipleTasks(tasksData: CreateMultipleTasksRequest): Promise<Task[]
     return colors[status] || 'default';
   }
 
-  // Helper to get assigned user names as string
   getAssignedUserNames(task: Task): string {
     return task.assignedUsers.map(user => user.name).join(', ');
   }
 
-  // Helper to get managers from task
   getManagers(task: Task): AssignedUser[] {
     return task.assignedUsers.filter(user => user.role === 'manager');
   }
 
-  // Helper to get supervisors from task
   getSupervisors(task: Task): AssignedUser[] {
     return task.assignedUsers.filter(user => user.role === 'supervisor');
   }
 
-  // Helper to check if specific user is assigned
   isUserAssigned(task: Task, userId: string): boolean {
     return task.assignedUsers.some(user => user.userId === userId);
   }
 
-  // Helper to get user's individual status
   getUserStatus(task: Task, userId: string): string | null {
     const user = task.assignedUsers.find(u => u.userId === userId);
     return user ? user.status : null;
   }
 
-  // Helper to find missing roles for a site
   findMissingRoles(task: Task, siteManagerCount: number, siteSupervisorCount: number): {
     missingManagers: number;
     missingSupervisors: number;

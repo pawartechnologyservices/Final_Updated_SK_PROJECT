@@ -1,29 +1,57 @@
-// routes/managerLeaveRoutes.ts
 import express from 'express';
 import {
   applyManagerLeave,
   getManagerLeaves,
   getManagerLeaveStats,
+  getManagerLeaveById,
+  updateManagerLeave,
+  deleteManagerLeave,
   cancelManagerLeave,
-  getAllManagerLeavesForSuperadmin,
+  getManagerLeaveSummary,
+  // Admin functions
+  getAllManagerLeavesForAdmin,
   updateManagerLeaveStatus,
-  //testManagerLeaves
+  revertManagerLeaveToPending,
+  // Superadmin functions
+  getAllManagerLeavesForSuperadmin,
+  updateManagerLeaveStatusBySuperadmin,
+  revertManagerLeaveToPendingBySuperadmin,
+  bulkUpdateManagerLeaves,
+  getManagerLeaveStatsByDepartment,
+  cleanupManagerLeaveDuplicates,
+  testManagerLeave
 } from '../controllers/managerLeaveController';
 
 const router = express.Router();
 
 // Test endpoint
-//router.get('/test', testManagerLeaves);
+router.get('/test', testManagerLeave);
 
 // Manager routes (for managers themselves)
 router.post('/apply', applyManagerLeave);
-router.get('/', getManagerLeaves); // Gets only manager's own leaves
+router.get('/', getManagerLeaves);
 router.get('/stats', getManagerLeaveStats);
+router.get('/summary/:managerId', getManagerLeaveSummary);
+router.get('/:id', getManagerLeaveById);
+router.put('/:id', updateManagerLeave);
+router.delete('/:id', deleteManagerLeave);
 router.put('/:id/cancel', cancelManagerLeave);
 
-// Superadmin routes (for managing manager leaves)
-// Change from '/superadmin/all' to just '/superadmin' to match frontend
-router.get('/superadmin', getAllManagerLeavesForSuperadmin); // Gets all manager leaves
-router.put('/superadmin/:id/status', updateManagerLeaveStatus); // Approve/reject manager leaves
+// Admin routes (for admin users)
+router.get('/admin/all', getAllManagerLeavesForAdmin);
+router.put('/admin/:id/status', updateManagerLeaveStatus);
+router.put('/admin/:id/revert', revertManagerLeaveToPending);
+
+// Superadmin routes (for superadmin users)
+router.get('/superadmin/all', getAllManagerLeavesForSuperadmin);
+router.put('/superadmin/:id/status', updateManagerLeaveStatusBySuperadmin);
+router.put('/superadmin/:id/revert', revertManagerLeaveToPendingBySuperadmin);
+router.post('/superadmin/bulk', bulkUpdateManagerLeaves);
+
+// Statistics routes
+router.get('/stats/department', getManagerLeaveStatsByDepartment);
+
+// Admin utility
+router.post('/cleanup', cleanupManagerLeaveDuplicates);
 
 export default router;

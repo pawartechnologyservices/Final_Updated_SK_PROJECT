@@ -1,3 +1,4 @@
+// models/ManagerAttendance.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IManagerAttendance extends Document {
@@ -5,13 +6,15 @@ export interface IManagerAttendance extends Document {
   managerName: string;
   checkInTime: Date | null;
   checkOutTime: Date | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: Date | null;
   breakEndTime: Date | null;
   totalHours: number;
   breakTime: number;
   isCheckedIn: boolean;
   isOnBreak: boolean;
-  date: string; // Changed to string format YYYY-MM-DD
+  date: string;
   hasCheckedOutToday: boolean;
   dailyActivities: Array<{
     type: string;
@@ -41,6 +44,14 @@ const ManagerAttendanceSchema = new Schema({
     type: Date,
     default: null
   },
+  checkInPhoto: {
+    type: String,
+    default: null
+  },
+  checkOutPhoto: {
+    type: String,
+    default: null
+  },
   breakStartTime: {
     type: Date,
     default: null
@@ -68,12 +79,11 @@ const ManagerAttendanceSchema = new Schema({
     default: false
   },
   date: {
-    type: String, // Changed to String
+    type: String,
     required: true,
     index: true,
     validate: {
       validator: function(v: string) {
-        // Validate YYYY-MM-DD format
         return /^\d{4}-\d{2}-\d{2}$/.test(v);
       },
       message: 'Date must be in YYYY-MM-DD format'

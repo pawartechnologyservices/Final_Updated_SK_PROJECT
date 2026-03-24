@@ -1,24 +1,61 @@
-// routes/adminLeaveRoutes.ts
 import express from 'express';
 import {
   applyAdminLeave,
   getAdminLeaves,
-  getAdminLeaveStats,
-  updateAdminLeaveStatus,
+  getAdminLeaveById,
+  updateAdminLeave,
+  deleteAdminLeave,
   cancelAdminLeave,
-  getAllAdminLeavesForSuperadmin
+  getAdminLeaveSummary,
+  getAdminLeaveStats,
+  // Admin functions
+  getAllAdminLeavesForAdmin,
+  updateAdminLeaveStatus,
+  revertAdminLeaveToPending,
+  // Superadmin functions
+  getAllAdminLeavesForSuperadmin,
+  updateAdminLeaveStatusBySuperadmin,
+  revertAdminLeaveToPendingBySuperadmin,
+  testAdminLeave
 } from '../controllers/adminLeaveController';
 
 const router = express.Router();
 
-// Admin leave routes (for admins)
+// Test endpoint
+router.get('/test', testAdminLeave);
+
+// Apply for admin leave
 router.post('/apply', applyAdminLeave);
-router.get('/', getAdminLeaves); // Gets only admin's own leaves
+
+// Get admin's own leaves
+router.get('/', getAdminLeaves);
+
+// Get leave statistics
 router.get('/stats', getAdminLeaveStats);
+
+// Get monthly summary
+router.get('/summary/:adminId', getAdminLeaveSummary);
+
+// Get leave by ID
+router.get('/:id', getAdminLeaveById);
+
+// Update leave (edit)
+router.put('/:id', updateAdminLeave);
+
+// Delete leave
+router.delete('/:id', deleteAdminLeave);
+
+// Cancel leave
 router.put('/:id/cancel', cancelAdminLeave);
 
-// Superadmin routes (for managing admin leaves)
-router.get('/superadmin/all', getAllAdminLeavesForSuperadmin); // Gets all admin leaves
-router.put('/superadmin/:id/status', updateAdminLeaveStatus); // Approve/reject admin leaves
+// Admin routes (for admin users)
+router.get('/admin/all', getAllAdminLeavesForAdmin);
+router.put('/admin/:id/status', updateAdminLeaveStatus);
+router.put('/admin/:id/revert', revertAdminLeaveToPending);
+
+// Superadmin routes (for superadmin users)
+router.get('/superadmin/all', getAllAdminLeavesForSuperadmin);
+router.put('/superadmin/:id/status', updateAdminLeaveStatusBySuperadmin);
+router.put('/superadmin/:id/revert', revertAdminLeaveToPendingBySuperadmin);
 
 export default router;

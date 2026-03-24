@@ -4,6 +4,12 @@ import xlsx from 'xlsx';
 import path from 'path';
 import fs from 'fs';
 import Employee, { IEmployee } from '../models/Employee';
+import { 
+  uploadImageToCloudinary, 
+  uploadSignatureToCloudinary,
+  uploadDocumentToCloudinary,
+  deleteFromCloudinary 
+} from '../utils/CloudinaryUtils';
 
 const router = express.Router();
 
@@ -20,6 +26,21 @@ const imageUpload = multer({
       cb(null, true);
     } else {
       cb(new Error('Only image files are allowed!'));
+    }
+  }
+});
+
+const documentStorage = multer.memoryStorage();
+const documentUpload = multer({
+  storage: documentStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image and PDF files are allowed!'));
     }
   }
 });
@@ -49,7 +70,7 @@ const excelUpload = multer({
     cb(null, true);
   },
   limits: {
-    fileSize: 10 * 1024 * 1024
+    fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 });
 
@@ -237,7 +258,7 @@ router.post('/bulk/get', async (req: any, res: any) => {
     }
     
     const employees = await Employee.find({ _id: { $in: employeeIds } })
-      .select('employeeId name department siteName status siteHistory');
+      .select('employeeId name department siteName status siteHistory kycDocuments');
     
     res.status(200).json({
       success: true,
@@ -285,6 +306,31 @@ router.get('/stats', async (req: any, res: any) => {
       { $sort: { count: -1 } }
     ]);
 
+    const kycStats = await Employee.aggregate([
+      {
+        $project: {
+          totalDocs: { $size: { $ifNull: ['$kycDocuments', []] } },
+          verifiedDocs: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ['$kycDocuments', []] },
+                cond: { $eq: ['$$this.verified', true] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalEmployees: { $sum: 1 },
+          employeesWithDocs: { $sum: { $cond: [{ $gt: ['$totalDocs', 0] }, 1, 0] } },
+          totalDocuments: { $sum: '$totalDocs' },
+          totalVerified: { $sum: '$verifiedDocs' }
+        }
+      }
+    ]);
+
     res.json({
       success: true,
       data: {
@@ -293,7 +339,13 @@ router.get('/stats', async (req: any, res: any) => {
         inactive: inactiveEmployees,
         left: leftEmployees,
         departments: departmentStats,
-        sites: siteStats
+        sites: siteStats,
+        kyc: kycStats[0] || {
+          totalEmployees: 0,
+          employeesWithDocs: 0,
+          totalDocuments: 0,
+          totalVerified: 0
+        }
       }
     });
   } catch (error: any) {
@@ -472,6 +524,7 @@ router.post('/import', excelUpload.single('file'), async (req: any, res: any) =>
           idCardIssued: false,
           westcoatIssued: false,
           apronIssued: false,
+          kycDocuments: [],
           siteHistory: row.siteName ? [{
             siteName: row.siteName,
             assignedDate: new Date()
@@ -582,7 +635,9 @@ router.get('/export', async (req: any, res: any) => {
       'Spouse Name': emp.spouseName || '',
       'Number of Children': emp.numberOfChildren || 0,
       'Nominee Name': emp.nomineeName || '',
-      'Nominee Relation': emp.nomineeRelation || ''
+      'Nominee Relation': emp.nomineeRelation || '',
+      'KYC Documents Count': emp.kycDocuments?.length || 0,
+      'Verified Documents': emp.kycDocuments?.filter(d => d.verified).length || 0
     }));
 
     const workbook = xlsx.utils.book_new();
@@ -607,6 +662,7 @@ router.get('/export', async (req: any, res: any) => {
 
 // ==================== SINGLE EMPLOYEE CRUD ROUTES ====================
 
+// GET all employees with pagination and filters
 router.get('/', async (req: any, res: any) => {
   try {
     const { 
@@ -666,7 +722,7 @@ router.get('/', async (req: any, res: any) => {
       .sort(sort)
       .skip(skip)
       .limit(limitNum)
-      .select('-__v');
+      .select('-__v -photoPublicId -employeeSignaturePublicId -authorizedSignaturePublicId');
 
     const total = await Employee.countDocuments(query);
 
@@ -690,6 +746,7 @@ router.get('/', async (req: any, res: any) => {
   }
 });
 
+// CREATE employee with Cloudinary upload
 router.post('/',
   imageUpload.fields([
     { name: 'photo', maxCount: 1 },
@@ -698,7 +755,9 @@ router.post('/',
   ]),
   async (req: any, res: any) => {
     try {
-      const employeeData = req.body;
+      const employeeData = { ...req.body };
+      console.log('Creating employee with data:', employeeData);
+      console.log('Files received:', req.files);
       
       const existingEmployee = await Employee.findOne({ 
         $or: [
@@ -714,35 +773,127 @@ router.post('/',
         });
       }
 
-      if (req.files) {
-        if (req.files['photo']) {
-          employeeData.photo = req.files['photo'][0].buffer.toString('base64');
-        }
-        if (req.files['employeeSignature']) {
-          employeeData.employeeSignature = req.files['employeeSignature'][0].buffer.toString('base64');
-        }
-        if (req.files['authorizedSignature']) {
-          employeeData.authorizedSignature = req.files['authorizedSignature'][0].buffer.toString('base64');
+      let photoUrl = '';
+      let photoPublicId = '';
+      let employeeSignatureUrl = '';
+      let employeeSignaturePublicId = '';
+      let authorizedSignatureUrl = '';
+      let authorizedSignaturePublicId = '';
+
+      if (req.files && req.files['photo'] && req.files['photo'][0]) {
+        try {
+          const photoFile = req.files['photo'][0];
+          console.log('Uploading photo to Cloudinary...');
+          const photoResult = await uploadImageToCloudinary(photoFile.buffer, 'employee-photos');
+          photoUrl = photoResult.secure_url;
+          photoPublicId = photoResult.public_id;
+          console.log('Photo uploaded to Cloudinary:', photoUrl);
+        } catch (photoError) {
+          console.error('Error uploading photo to Cloudinary:', photoError);
         }
       }
 
-      if (employeeData.siteName) {
+      if (req.files && req.files['employeeSignature'] && req.files['employeeSignature'][0]) {
+        try {
+          const signatureFile = req.files['employeeSignature'][0];
+          console.log('Uploading employee signature to Cloudinary...');
+          const signatureResult = await uploadSignatureToCloudinary(signatureFile.buffer, 'employee-signatures');
+          employeeSignatureUrl = signatureResult.secure_url;
+          employeeSignaturePublicId = signatureResult.public_id;
+          console.log('Employee signature uploaded to Cloudinary:', employeeSignatureUrl);
+        } catch (sigError) {
+          console.error('Error uploading employee signature to Cloudinary:', sigError);
+        }
+      }
+
+      if (req.files && req.files['authorizedSignature'] && req.files['authorizedSignature'][0]) {
+        try {
+          const authSigFile = req.files['authorizedSignature'][0];
+          console.log('Uploading authorized signature to Cloudinary...');
+          const authSigResult = await uploadSignatureToCloudinary(authSigFile.buffer, 'authorized-signatures');
+          authorizedSignatureUrl = authSigResult.secure_url;
+          authorizedSignaturePublicId = authSigResult.public_id;
+          console.log('Authorized signature uploaded to Cloudinary:', authorizedSignatureUrl);
+        } catch (authSigError) {
+          console.error('Error uploading authorized signature to Cloudinary:', authSigError);
+        }
+      }
+
+      employeeData.photo = photoUrl;
+      employeeData.photoPublicId = photoPublicId;
+      employeeData.employeeSignature = employeeSignatureUrl;
+      employeeData.employeeSignaturePublicId = employeeSignaturePublicId;
+      employeeData.authorizedSignature = authorizedSignatureUrl;
+      employeeData.authorizedSignaturePublicId = authorizedSignaturePublicId;
+
+      const optionalFields = ['panNumber', 'esicNumber', 'uanNumber', 'permanentAddress', 'localAddress', 
+                             'bankName', 'accountNumber', 'ifscCode', 'branchName', 'fatherName', 
+                             'motherName', 'spouseName', 'emergencyContactName', 'emergencyContactPhone',
+                             'emergencyContactRelation', 'nomineeName', 'nomineeRelation', 'bloodGroup',
+                             'gender', 'maritalStatus', 'pantSize', 'shirtSize', 'capSize', 'siteName'];
+      
+      optionalFields.forEach(field => {
+        if (employeeData[field] === '' || employeeData[field] === undefined) {
+          employeeData[field] = null;
+        }
+      });
+
+      if (employeeData.salary) employeeData.salary = parseFloat(employeeData.salary);
+      if (employeeData.numberOfChildren) employeeData.numberOfChildren = parseInt(employeeData.numberOfChildren) || 0;
+
+      employeeData.idCardIssued = employeeData.idCardIssued === 'true' || employeeData.idCardIssued === true;
+      employeeData.westcoatIssued = employeeData.westcoatIssued === 'true' || employeeData.westcoatIssued === true;
+      employeeData.apronIssued = employeeData.apronIssued === 'true' || employeeData.apronIssued === true;
+
+      if (employeeData.dateOfBirth) employeeData.dateOfBirth = employeeData.dateOfBirth ? new Date(employeeData.dateOfBirth) : null;
+      if (employeeData.dateOfJoining) employeeData.dateOfJoining = employeeData.dateOfJoining ? new Date(employeeData.dateOfJoining) : new Date();
+      if (employeeData.dateOfExit) employeeData.dateOfExit = employeeData.dateOfExit ? new Date(employeeData.dateOfExit) : null;
+
+      employeeData.kycDocuments = [];
+
+      if (employeeData.siteName && employeeData.siteName !== '') {
         employeeData.siteHistory = [{
           siteName: employeeData.siteName,
           assignedDate: new Date()
         }];
       }
 
+      console.log('Creating employee with data:', employeeData);
+
       const newEmployee = new Employee(employeeData);
       await newEmployee.save();
+
+      const employeeResponse = newEmployee.toObject();
+      delete employeeResponse.photoPublicId;
+      delete employeeResponse.employeeSignaturePublicId;
+      delete employeeResponse.authorizedSignaturePublicId;
 
       res.status(201).json({
         success: true,
         message: 'Employee created successfully',
-        data: newEmployee
+        employee: employeeResponse
       });
     } catch (error: any) {
       console.error('Create employee error:', error);
+      
+      if (error.code === 11000) {
+        const field = Object.keys(error.keyPattern)[0];
+        return res.status(400).json({ 
+          success: false, 
+          message: `Duplicate value for ${field}`,
+          error: error.message 
+        });
+      }
+      
+      if (error.name === 'ValidationError') {
+        const messages = Object.values(error.errors).map((err: any) => err.message);
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Validation error',
+          errors: messages
+        });
+      }
+      
       res.status(500).json({ 
         success: false, 
         message: 'Error creating employee',
@@ -752,9 +903,11 @@ router.post('/',
   }
 );
 
+// GET employee by ID
 router.get('/:id', async (req: any, res: any) => {
   try {
-    const employee = await Employee.findById(req.params.id).select('-__v');
+    const employee = await Employee.findById(req.params.id)
+      .select('-__v -photoPublicId -employeeSignaturePublicId -authorizedSignaturePublicId');
     
     if (!employee) {
       return res.status(404).json({ 
@@ -777,13 +930,12 @@ router.get('/:id', async (req: any, res: any) => {
   }
 });
 
-// FIXED: Support both PUT and PATCH methods
-// Update the updateEmployeeHandler in your routes file with better error handling:
-
+// UPDATE employee handler with Cloudinary upload
 const updateEmployeeHandler = async (req: any, res: any) => {
   try {
-    const employeeData = req.body;
+    const employeeData = { ...req.body };
     console.log('Updating employee with data:', employeeData);
+    console.log('Files received for update:', req.files);
     
     const existingEmployee = await Employee.findById(req.params.id);
     
@@ -795,18 +947,46 @@ const updateEmployeeHandler = async (req: any, res: any) => {
     }
 
     if (req.files) {
-      if (req.files['photo']) {
-        employeeData.photo = req.files['photo'][0].buffer.toString('base64');
+      if (req.files['photo'] && req.files['photo'][0]) {
+        try {
+          const photoFile = req.files['photo'][0];
+          console.log('Uploading new photo to Cloudinary...');
+          const photoResult = await uploadImageToCloudinary(photoFile.buffer, 'employee-photos');
+          employeeData.photo = photoResult.secure_url;
+          employeeData.photoPublicId = photoResult.public_id;
+          console.log('New photo uploaded to Cloudinary:', employeeData.photo);
+        } catch (photoError) {
+          console.error('Error uploading new photo to Cloudinary:', photoError);
+        }
       }
-      if (req.files['employeeSignature']) {
-        employeeData.employeeSignature = req.files['employeeSignature'][0].buffer.toString('base64');
+
+      if (req.files['employeeSignature'] && req.files['employeeSignature'][0]) {
+        try {
+          const signatureFile = req.files['employeeSignature'][0];
+          console.log('Uploading new employee signature to Cloudinary...');
+          const signatureResult = await uploadSignatureToCloudinary(signatureFile.buffer, 'employee-signatures');
+          employeeData.employeeSignature = signatureResult.secure_url;
+          employeeData.employeeSignaturePublicId = signatureResult.public_id;
+          console.log('New employee signature uploaded to Cloudinary:', employeeData.employeeSignature);
+        } catch (sigError) {
+          console.error('Error uploading new employee signature to Cloudinary:', sigError);
+        }
       }
-      if (req.files['authorizedSignature']) {
-        employeeData.authorizedSignature = req.files['authorizedSignature'][0].buffer.toString('base64');
+
+      if (req.files['authorizedSignature'] && req.files['authorizedSignature'][0]) {
+        try {
+          const authSigFile = req.files['authorizedSignature'][0];
+          console.log('Uploading new authorized signature to Cloudinary...');
+          const authSigResult = await uploadSignatureToCloudinary(authSigFile.buffer, 'authorized-signatures');
+          employeeData.authorizedSignature = authSigResult.secure_url;
+          employeeData.authorizedSignaturePublicId = authSigResult.public_id;
+          console.log('New authorized signature uploaded to Cloudinary:', employeeData.authorizedSignature);
+        } catch (authSigError) {
+          console.error('Error uploading new authorized signature to Cloudinary:', authSigError);
+        }
       }
     }
 
-    // Check if site is being updated
     if (employeeData.siteName && employeeData.siteName !== existingEmployee.siteName) {
       const today = new Date();
       const siteHistory = existingEmployee.siteHistory || [];
@@ -832,8 +1012,6 @@ const updateEmployeeHandler = async (req: any, res: any) => {
       employeeData.siteHistory = siteHistory;
     }
 
-    // Clean up data to match schema expectations
-    // Convert empty strings to null for optional fields
     const optionalFields = ['panNumber', 'esicNumber', 'uanNumber', 'permanentAddress', 'localAddress', 
                            'bankName', 'accountNumber', 'ifscCode', 'branchName', 'fatherName', 
                            'motherName', 'spouseName', 'emergencyContactName', 'emergencyContactPhone',
@@ -846,35 +1024,19 @@ const updateEmployeeHandler = async (req: any, res: any) => {
       }
     });
 
-    // Ensure enum fields match schema
-    if (employeeData.department) {
-      const validDepartments = [
-        'Housekeeping', 'Security', 'Parking Management', 'Waste Management',
-        'STP Tank Cleaning', 'Consumables Management', 'Administration',
-        'Finance', 'HR', 'IT', 'Operations', 'Maintenance', 'Driver',
-        'Supervisor', 'Sales', 'General Staff'
-      ];
-      if (!validDepartments.includes(employeeData.department)) {
-        employeeData.department = 'General Staff';
-      }
-    }
-
-    // Parse numeric fields
     if (employeeData.salary) employeeData.salary = parseFloat(employeeData.salary);
-    if (employeeData.numberOfChildren) employeeData.numberOfChildren = parseInt(employeeData.numberOfChildren);
+    if (employeeData.numberOfChildren) employeeData.numberOfChildren = parseInt(employeeData.numberOfChildren) || 0;
 
-    // Parse boolean fields
     if (employeeData.idCardIssued !== undefined) {
-      employeeData.idCardIssued = employeeData.idCardIssued === true || employeeData.idCardIssued === 'true';
+      employeeData.idCardIssued = employeeData.idCardIssued === 'true' || employeeData.idCardIssued === true;
     }
     if (employeeData.westcoatIssued !== undefined) {
-      employeeData.westcoatIssued = employeeData.westcoatIssued === true || employeeData.westcoatIssued === 'true';
+      employeeData.westcoatIssued = employeeData.westcoatIssued === 'true' || employeeData.westcoatIssued === true;
     }
     if (employeeData.apronIssued !== undefined) {
-      employeeData.apronIssued = employeeData.apronIssued === true || employeeData.apronIssued === 'true';
+      employeeData.apronIssued = employeeData.apronIssued === 'true' || employeeData.apronIssued === true;
     }
 
-    // Parse date fields
     if (employeeData.dateOfBirth) employeeData.dateOfBirth = employeeData.dateOfBirth ? new Date(employeeData.dateOfBirth) : null;
     if (employeeData.dateOfJoining) employeeData.dateOfJoining = employeeData.dateOfJoining ? new Date(employeeData.dateOfJoining) : new Date();
     if (employeeData.dateOfExit) employeeData.dateOfExit = employeeData.dateOfExit ? new Date(employeeData.dateOfExit) : null;
@@ -885,7 +1047,7 @@ const updateEmployeeHandler = async (req: any, res: any) => {
       req.params.id,
       { $set: employeeData },
       { new: true, runValidators: true }
-    ).select('-__v');
+    ).select('-__v -photoPublicId -employeeSignaturePublicId -authorizedSignaturePublicId');
 
     res.json({
       success: true,
@@ -901,7 +1063,6 @@ const updateEmployeeHandler = async (req: any, res: any) => {
       errors: error.errors
     });
     
-    // Handle validation errors
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map((err: any) => err.message);
       return res.status(400).json({ 
@@ -911,7 +1072,6 @@ const updateEmployeeHandler = async (req: any, res: any) => {
       });
     }
     
-    // Handle duplicate key errors
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
       return res.status(400).json({ 
@@ -994,7 +1154,7 @@ router.patch('/:id/status', async (req: any, res: any) => {
       req.params.id,
       updateData,
       { new: true }
-    ).select('-__v');
+    ).select('-__v -photoPublicId -employeeSignaturePublicId -authorizedSignaturePublicId');
 
     if (!employee) {
       return res.status(404).json({ 
@@ -1014,6 +1174,323 @@ router.patch('/:id/status', async (req: any, res: any) => {
       success: false, 
       message: 'Error updating employee status',
       error: error.message 
+    });
+  }
+});
+
+// ==================== DOCUMENT MANAGEMENT ROUTES ====================
+
+// Define Document Type Enum
+type DocumentType = 'aadhar' | 'pan' | 'electricity' | 'driving' | 'police' | 'voter' | 'passport' | 'other';
+
+// Interface for KYC document
+interface KYCdocument {
+  documentType: DocumentType;
+  documentName: string;
+  documentNumber?: string;
+  fileUrl: string;
+  filePublicId: string;
+  uploadedAt: Date;
+  verified: boolean;
+  verifiedAt?: Date;
+  verifiedBy?: string;
+  expiryDate?: Date;
+}
+
+// Upload document for employee
+// Upload document for employee
+router.post('/:id/documents',
+  documentUpload.single('document'),
+  async (req: any, res: any) => {
+    try {
+      const { id } = req.params;
+      const { documentType, documentName, documentNumber, expiryDate } = req.body;
+      
+      console.log('Document upload request received:', { id, documentType, documentName });
+      
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No document file uploaded'
+        });
+      }
+
+      if (!documentType || !documentName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Document type and name are required'
+        });
+      }
+
+      // Validate documentType is one of the allowed values
+      const validDocumentTypes: DocumentType[] = ['aadhar', 'pan', 'electricity', 'driving', 'police', 'voter', 'passport', 'other'];
+      if (!validDocumentTypes.includes(documentType as DocumentType)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid document type'
+        });
+      }
+
+      const employee = await Employee.findById(id);
+      
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee not found'
+        });
+      }
+
+      let folder = 'employee-documents';
+      if (documentType === 'aadhar') folder = 'employee-documents/aadhar';
+      else if (documentType === 'pan') folder = 'employee-documents/pan';
+      else if (documentType === 'police') folder = 'employee-documents/police';
+      else if (documentType === 'driving') folder = 'employee-documents/driving';
+      else if (documentType === 'electricity') folder = 'employee-documents/electricity';
+      else if (documentType === 'voter') folder = 'employee-documents/voter';
+      else if (documentType === 'passport') folder = 'employee-documents/passport';
+      else folder = 'employee-documents/other';
+      
+      // Upload to Cloudinary with original filename
+      const uploadResult = await uploadDocumentToCloudinary(
+        req.file.buffer, 
+        folder,
+        req.file.originalname
+      );
+      
+      // Create document entry with proper typing
+      const newDocument: KYCdocument = {
+        documentType: documentType as DocumentType,
+        documentName,
+        documentNumber: documentNumber || undefined,
+        fileUrl: uploadResult.secure_url,
+        filePublicId: uploadResult.public_id,
+        uploadedAt: new Date(),
+        verified: false,
+        expiryDate: expiryDate ? new Date(expiryDate) : undefined
+      };
+
+      if (!employee.kycDocuments) {
+        employee.kycDocuments = [];
+      }
+      
+      employee.kycDocuments.push(newDocument);
+      
+      await employee.save();
+
+      // Create response object without filePublicId
+      const { filePublicId, ...documentResponse } = newDocument;
+
+      // Add file type info to response
+      const responseWithFileInfo = {
+        ...documentResponse,
+        fileType: req.file.mimetype,
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        resourceType: uploadResult.resource_type
+      };
+
+      res.status(201).json({
+        success: true,
+        message: 'Document uploaded successfully',
+        document: responseWithFileInfo
+      });
+
+    } catch (error: any) {
+      console.error('Error uploading document:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error uploading document',
+        error: error.message
+      });
+    }
+  }
+);
+
+// Get all documents for an employee
+router.get('/:id/documents', async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    
+    const employee = await Employee.findById(id).select('kycDocuments');
+    
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    const documents = (employee.kycDocuments || []).map((doc: any) => {
+      const { filePublicId, ...rest } = doc.toObject ? doc.toObject() : doc;
+      return rest;
+    });
+
+    res.json({
+      success: true,
+      documents
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching documents:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching documents',
+      error: error.message
+    });
+  }
+});
+
+// Delete a document
+router.delete('/:id/documents/:documentIndex', async (req: any, res: any) => {
+  try {
+    const { id, documentIndex } = req.params;
+    const index = parseInt(documentIndex);
+    
+    const employee = await Employee.findById(id);
+    
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    if (!employee.kycDocuments || index >= employee.kycDocuments.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    const documentToDelete = employee.kycDocuments[index];
+    
+    try {
+      if (documentToDelete.filePublicId) {
+        await deleteFromCloudinary(documentToDelete.filePublicId);
+      }
+    } catch (cloudinaryError) {
+      console.error('Error deleting from Cloudinary:', cloudinaryError);
+    }
+    
+    employee.kycDocuments.splice(index, 1);
+    await employee.save();
+
+    res.json({
+      success: true,
+      message: 'Document deleted successfully'
+    });
+
+  } catch (error: any) {
+    console.error('Error deleting document:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting document',
+      error: error.message
+    });
+  }
+});
+
+// Verify a document
+router.patch('/:id/documents/:documentIndex/verify', async (req: any, res: any) => {
+  try {
+    const { id, documentIndex } = req.params;
+    const index = parseInt(documentIndex);
+    
+    const employee = await Employee.findById(id);
+    
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    if (!employee.kycDocuments || index >= employee.kycDocuments.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    employee.kycDocuments[index].verified = true;
+    employee.kycDocuments[index].verifiedAt = new Date();
+    employee.kycDocuments[index].verifiedBy = req.user?.id || 'system';
+    
+    await employee.save();
+
+    res.json({
+      success: true,
+      message: 'Document verified successfully'
+    });
+
+  } catch (error: any) {
+    console.error('Error verifying document:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verifying document',
+      error: error.message
+    });
+  }
+});
+
+// Get document statistics
+router.get('/:id/documents/stats', async (req: any, res: any) => {
+  try {
+    const { id } = req.params;
+    
+    const employee = await Employee.findById(id).select('kycDocuments');
+    
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    const documents = employee.kycDocuments || [];
+    const totalDocs = documents.length;
+    const verifiedDocs = documents.filter(d => d.verified).length;
+    const pendingDocs = totalDocs - verifiedDocs;
+    
+    const documentTypes = {
+      aadhar: documents.find(d => d.documentType === 'aadhar'),
+      pan: documents.find(d => d.documentType === 'pan'),
+      police: documents.find(d => d.documentType === 'police'),
+      driving: documents.find(d => d.documentType === 'driving'),
+      electricity: documents.find(d => d.documentType === 'electricity'),
+      voter: documents.find(d => d.documentType === 'voter'),
+      passport: documents.find(d => d.documentType === 'passport'),
+      other: documents.filter(d => d.documentType === 'other').length
+    };
+
+    const requiredDocs = ['aadhar', 'pan', 'police'];
+    const uploadedRequired = requiredDocs.filter(type => 
+      documents.some(d => d.documentType === type)
+    ).length;
+    const verifiedRequired = requiredDocs.filter(type => 
+      documents.some(d => d.documentType === type && d.verified)
+    ).length;
+
+    res.json({
+      success: true,
+      stats: {
+        total: totalDocs,
+        verified: verifiedDocs,
+        pending: pendingDocs,
+        uploadedRequired,
+        verifiedRequired,
+        completionPercentage: (uploadedRequired / requiredDocs.length) * 100,
+        verificationPercentage: (verifiedRequired / requiredDocs.length) * 100,
+        documentTypes
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching document stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching document statistics',
+      error: error.message
     });
   }
 });

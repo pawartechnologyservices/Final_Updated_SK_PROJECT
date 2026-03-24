@@ -1,36 +1,91 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useOutletContext, useNavigate } from "react-router-dom";
 import { DashboardHeader } from "@/components/shared/DashboardHeader";
-import { DashboardSidebar } from "@/components/shared/DashboardSidebar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { 
-  Plus, Loader2, RefreshCw, Users, AlertCircle, Database, Search, Building, 
-  Check, X, Calendar as CalendarIcon, Clock, Filter, Download, User, Hash, 
-  Eye, FileText, Mail, Phone, MapPin, AlertTriangle, Info, Bell, 
-  ChevronDown, ChevronUp, BarChart, TrendingUp, CheckSquare, 
-  Square, Send, MessageSquare, Printer, Upload, Shield, ExternalLink,
-  Zap, Wifi, WifiOff, Layers, PieChart, BarChart3, CalendarDays,
-  Users2, UserCheck, UserX, Clock4, Target, BellRing, History,
-  Sparkles, Star, Award, Rocket, ShieldCheck, ShieldAlert,
-  LineChart, DownloadCloud, CloudOff, Cloud, FileSpreadsheet, Menu
+  Calendar, 
+  CheckCircle, 
+  XCircle, 
+  Clock, 
+  Download, 
+  Filter, 
+  BarChart3, 
+  TrendingUp, 
+  AlertCircle, 
+  User, 
+  Loader2, 
+  Coffee, 
+  Timer, 
+  Users, 
+  Building, 
+  Eye, 
+  UserCheck, 
+  UserX, 
+  Crown,
+  ArrowLeft,
+  RefreshCw,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  MapPin,
+  Briefcase,
+  Percent,
+  UserCog,
+  Mail,
+  Phone,
+  UserCircle,
+  LogIn,
+  LogOut,
+  CalendarDays,
+  Shield,
+  UserMinus,
+  UserPlus,
+  CheckSquare,
+  XSquare,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Send,
+  RotateCcw,
+  Info,
+  Home,
+  Heart,
+  Umbrella,
+  Edit,
+  Trash2,
+  Save
 } from "lucide-react";
 import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
+import userService from "@/services/userService";
 import { useRole } from "@/context/RoleContext";
-import { format, isWithinInterval, startOfMonth, endOfMonth, eachDayOfInterval } from "date-fns";
-import { taskService } from "@/services/TaskService";
-import type { ExtendedSite } from "@/services/TaskService";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { format } from "date-fns";
 
+// API Base URL
+const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:5001/api`;
+
+// Interface for Leave Request (Employee & Supervisor)
 interface LeaveRequest {
   _id: string;
   id?: string;
@@ -46,6 +101,7 @@ interface LeaveRequest {
   appliedBy: string;
   appliedFor: string;
   createdAt: string;
+  updatedAt: string;
   contactNumber: string;
   remarks?: string;
   approvedBy?: string;
@@ -60,15 +116,47 @@ interface LeaveRequest {
   handoverRemarks?: string;
   attachmentUrl?: string;
   isManagerLeave?: boolean;
+  isSupervisorLeave?: boolean;
   managerId?: string;
+  supervisorId?: string;
   site?: string;
+  siteId?: string;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
-  escalationLevel?: number;
-  escalationTo?: string;
-  lastRemindedAt?: string;
-  comments?: Comment[];
+  position?: string;
+  email?: string;
 }
 
+// Interface for Manager Leave Request
+interface ManagerLeaveRequest {
+  _id: string;
+  id?: string;
+  managerId: string;
+  managerName: string;
+  managerDepartment: string;
+  managerPosition: string;
+  managerEmail: string;
+  managerContact: string;
+  leaveType: 'annual' | 'sick' | 'casual' | 'maternity' | 'paternity' | 'bereavement' | 'unpaid' | 'other';
+  fromDate: string;
+  toDate: string;
+  totalDays: number;
+  reason: string;
+  appliedBy: string;
+  appliedDate: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  remarks?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  superadminRemarks?: string;
+  cancellationReason?: string;
+  requestType: 'manager-leave';
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Interface for Employee
 interface Employee {
   _id: string;
   employeeId: string;
@@ -79,8 +167,11 @@ interface Employee {
   email: string;
   isActive?: boolean;
   site?: string;
+  isSupervisor?: boolean;
+  role?: string;
 }
 
+// Interface for Manager Info
 interface ManagerInfo {
   _id: string;
   employeeId?: string;
@@ -95,2841 +186,3157 @@ interface ManagerInfo {
   sites?: string[];
 }
 
-interface Comment {
+// Interface for Site
+interface Site {
+  _id: string;
+  name: string;
+  clientName?: string;
+  location?: string;
+  status?: string;
+  managerCount?: number;
+  supervisorCount?: number;
+  employeeCount?: number;
+}
+
+// Interface for Site Leave Data
+interface SiteLeaveData {
   id: string;
-  leaveId: string;
-  userId: string;
-  userName: string;
-  comment: string;
-  timestamp: string;
-  isManager: boolean;
-  userRole: string;
+  siteId: string;
+  name: string;
+  siteName: string;
+  clientName?: string;
+  location?: string;
+  totalEmployees: number;
+  pendingLeaves: number;
+  approvedLeaves: number;
+  rejectedLeaves: number;
+  cancelledLeaves: number;
+  supervisorLeaves: number;
+  employeeLeaves: number;
+  managerLeaves: number;
+  date: string;
+  employees: Employee[];
+  isRealData: boolean;
+  leaves: LeaveRequest[];
 }
 
-interface LeaveBalance {
-  casual: number;
-  sick: number;
-  annual: number;
-  maternity: number;
-  paternity: number;
-  bereavement: number;
-  other: number;
+// Interface for Leave Statistics
+interface LeaveStats {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  cancelled: number;
+  supervisorLeaves: number;
+  employeeLeaves: number;
+  managerLeaves: number;
+  totalDays: number;
 }
 
-interface Delegation {
-  employeeId: string;
-  employeeName: string;
-  fromDate: string;
-  toDate: string;
-  isActive: boolean;
+// Interface for Action Dialog
+interface ActionDialogState {
+  open: boolean;
+  type: 'approve' | 'reject' | 'pending' | null;
+  leaveId: string | null;
+  leaveDetails: LeaveRequest | null;
+  remarks: string;
 }
 
-interface Analytics {
-  monthlyTrend: { month: string; leaves: number }[];
-  departmentComparison: { department: string; leaves: number }[];
-  leaveTypeDistribution: { type: string; count: number }[];
-  approvalTime: { average: number; min: number; max: number };
-  topEmployees: { name: string; leaves: number }[];
-  siteComparison: { site: string; leaves: number }[];
-}
+// Helper function to format date
+const formatDate = (date: Date | string) => {
+  const dateObj = typeof date === 'string' ? new Date(date) : date;
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
-const API_URL = `http://${window.location.hostname}:5001/api`;
-
-const ManagerLeave = () => {
-  const { user: authUser, isAuthenticated } = useRole();
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [viewDialogOpen, setViewDialogOpen] = useState(false);
-  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
-  const [calendarDialogOpen, setCalendarDialogOpen] = useState(false);
-  const [analyticsDialogOpen, setAnalyticsDialogOpen] = useState(false);
-  const [delegationDialogOpen, setDelegationDialogOpen] = useState(false);
-  const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
-  const [myLeaves, setMyLeaves] = useState<LeaveRequest[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
-  const [availableSites, setAvailableSites] = useState<ExtendedSite[]>([]);
-  const [selectedSite, setSelectedSite] = useState<ExtendedSite | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLoadingEmployees, setIsLoadingEmployees] = useState(false);
-  const [managerDepartment, setManagerDepartment] = useState<string>("");
-  const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'cancelled'>('all');
-  const [priorityFilter, setPriorityFilter] = useState<string>("all");
-  const [myLeavesFilter, setMyLeavesFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'cancelled'>('all');
-  const [activeTab, setActiveTab] = useState('team-leaves');
-  const [selectedLeaves, setSelectedLeaves] = useState<string[]>([]);
-  const [calendarDate, setCalendarDate] = useState<Date>(new Date());
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [commentText, setCommentText] = useState("");
-  const [isAddingComment, setIsAddingComment] = useState(false);
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
-  const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
-  const [exportOptions, setExportOptions] = useState({
-    includeManagerLeaves: true,
-    includeComments: false,
-    includeAttachments: false,
-    format: 'csv' as 'csv' | 'excel' | 'pdf'
+const formatDateDisplay = (dateString: string) => {
+  if (!dateString) return '-';
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-US', { 
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
   });
+};
 
-  const [stats, setStats] = useState({
-    total: 0,
-    pending: 0,
-    approved: 0,
-    rejected: 0,
-    cancelled: 0,
-    urgent: 0,
-    escalated: 0
+const formatDateTimeDisplay = (dateString: string) => {
+  if (!dateString) return '-';
+  const date = new Date(dateString);
+  return date.toLocaleString('en-US', { 
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   });
+};
 
-  const [formData, setFormData] = useState({
-    leaveType: "",
-    fromDate: "",
-    toDate: "",
-    reason: "",
-    appliedBy: "",
-    priority: "medium",
-    handoverTo: "",
-    handoverRemarks: "",
-    attachment: null as File | null
-  });
+// Calculate days between dates
+const calculateDaysBetween = (startDate: string, endDate: string): number => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const timeDiff = end.getTime() - start.getTime();
+  const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+  return daysDiff + 1;
+};
 
-  const [managerInfo, setManagerInfo] = useState<ManagerInfo>({
-    _id: "",
-    name: "",
-    department: "",
-    contactNumber: "",
-    email: "",
-    role: "manager",
-    phone: "",
-    position: "Manager",
-    sites: []
-  });
-
-  const [leaveBalance, setLeaveBalance] = useState<LeaveBalance>({
-    casual: 12,
-    sick: 10,
-    annual: 30,
-    maternity: 180,
-    paternity: 15,
-    bereavement: 7,
-    other: 5
-  });
-
-  const [delegation, setDelegation] = useState<Delegation | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics>({
-    monthlyTrend: [],
-    departmentComparison: [],
-    leaveTypeDistribution: [],
-    approvalTime: { average: 0, min: 0, max: 0 },
-    topEmployees: [],
-    siteComparison: []
-  });
-
-  const [pendingActions, setPendingActions] = useState<any[]>([]);
-
-  // Function to fetch sites from TaskService
-  const fetchSitesFromTaskService = async () => {
-    try {
-      setIsLoading(true);
-      const sites = await taskService.getAllSites();
-      console.log("✅ Sites fetched from TaskService:", sites);
-      
-      // If manager has sites in their info, filter to only show those
-      if (managerInfo.sites && managerInfo.sites.length > 0) {
-        const managerSites = sites.filter(site => 
-          managerInfo.sites?.includes(site.name)
-        );
-        setAvailableSites(managerSites);
-        
-        // Set selected site based on manager's site
-        const defaultSite = managerSites.find(site => 
-          site.name === managerInfo.site || site.name === managerInfo.sites?.[0]
-        ) || managerSites[0];
-        
-        if (defaultSite) {
-          setSelectedSite(defaultSite);
-        }
-      } else {
-        // If no specific manager sites, use all sites
-        setAvailableSites(sites);
-        if (sites.length > 0) {
-          setSelectedSite(sites[0]);
-        }
-      }
-      
-    } catch (error) {
-      console.error("❌ Error fetching sites from TaskService:", error);
-      toast.error("Failed to fetch sites from TaskService");
-      
-      // Fallback to previous method
-      if (managerInfo.sites && managerInfo.sites.length > 0) {
-        const fallbackSites = managerInfo.sites.map(site => ({
-          _id: site,
-          name: site,
-          clientName: "Unknown",
-          location: "Unknown",
-          status: "active",
-          managerCount: 0,
-          supervisorCount: 0
-        }));
-        setAvailableSites(fallbackSites);
-        if (fallbackSites.length > 0) {
-          setSelectedSite(fallbackSites[0]);
-        }
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Get manager info from auth context
-  useEffect(() => {
-    if (authUser && isAuthenticated) {
-      const storedUser = localStorage.getItem('sk_user');
-      let userData = authUser;
-      
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser);
-          userData = { ...authUser, ...parsedUser };
-        } catch (e) {
-          console.error("Error parsing stored user:", e);
-        }
-      }
-      
-      const managerData: ManagerInfo = {
-        _id: userData._id || userData.id || `mgr_${Date.now()}`,
-        employeeId: userData.employeeId || userData.id || `MGR${Date.now().toString().slice(-6)}`,
-        name: userData.name || userData.firstName + " " + userData.lastName || "Manager",
-        department: userData.department || "",
-        contactNumber: userData.phone || userData.contactNumber || "0000000000",
-        email: userData.email || "",
-        role: userData.role || "manager",
-        phone: userData.phone || userData.contactNumber || "",
-        position: userData.position || "Manager",
-        site: userData.site || "Main Site",
-        sites: userData.sites || []
-      };
-      
-      setManagerInfo(managerData);
-      setFormData(prev => ({
-        ...prev,
-        appliedBy: managerData.name
-      }));
-
-      if (managerData.department) {
-        setManagerDepartment(managerData.department);
-      }
-
-      // Fetch sites from TaskService after setting manager info
-      fetchSitesFromTaskService();
-    }
-  }, [authUser, isAuthenticated]);
-
-  // Fetch departments and other data on component mount
-  useEffect(() => {
-    fetchDepartments();
-    fetchDelegation();
-    fetchAnalytics();
+// Fetch all leave requests (employee and supervisor)
+const fetchAllLeaveRequests = async (date?: string): Promise<LeaveRequest[]> => {
+  try {
+    console.log('🔄 Fetching all leave requests from API...');
     
-    // Load pending actions from localStorage
-    const storedActions = localStorage.getItem('pendingLeaveActions');
-    if (storedActions) {
-      setPendingActions(JSON.parse(storedActions));
-      if (isOnline) {
-        syncPendingActions();
-      }
+    let url = `${API_URL}/leaves?limit=1000`;
+    if (date) {
+      url += `&date=${date}`;
     }
-
-    // Set up online/offline listeners
-    const handleOnline = () => {
-      setIsOnline(true);
-      toast.success("You're back online!");
-      syncPendingActions();
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      toast.warning("You're offline. Actions will be queued.");
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  // Fetch employees and leave requests when department or site changes
-  useEffect(() => {
-    if (managerDepartment) {
-      fetchEmployees();
-      fetchLeaveRequests();
-      fetchMyLeaves();
+    
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-  }, [managerDepartment, selectedSite]);
-
-  useEffect(() => {
-    if (leaveRequests.length > 0) {
-      updateStats();
+    
+    const data = await response.json();
+    console.log('📥 Leave API response:', data);
+    
+    let leavesData = [];
+    
+    if (Array.isArray(data)) {
+      leavesData = data;
+    } else if (data?.success && Array.isArray(data.data)) {
+      leavesData = data.data;
+    } else if (data?.data && Array.isArray(data.data)) {
+      leavesData = data.data;
+    } else if (data?.leaves && Array.isArray(data.leaves)) {
+      leavesData = data.leaves;
+    } else if (data?.results && Array.isArray(data.results)) {
+      leavesData = data.results;
     }
-  }, [leaveRequests]);
+    
+    console.log(`📊 Raw leaves data count: ${leavesData.length}`);
+    
+    const transformedLeaves: LeaveRequest[] = leavesData.map((leave: any) => ({
+      _id: leave._id || leave.id || `leave_${Math.random()}`,
+      id: leave._id || leave.id,
+      employeeId: leave.employeeId || leave.employeeID || leave.empId || '',
+      employeeName: leave.employeeName || leave.name || leave.empName || 'Unknown',
+      department: leave.department || leave.dept || 'Unknown',
+      leaveType: leave.leaveType || leave.type || 'casual',
+      fromDate: leave.fromDate || leave.startDate || '',
+      toDate: leave.toDate || leave.endDate || '',
+      totalDays: leave.totalDays || leave.days || 1,
+      reason: leave.reason || leave.description || '',
+      status: leave.status || leave.leaveStatus || 'pending',
+      appliedBy: leave.appliedBy || leave.applicant || '',
+      appliedFor: leave.appliedFor || leave.employeeId || '',
+      createdAt: leave.createdAt || leave.created || leave.appliedDate || new Date().toISOString(),
+      updatedAt: leave.updatedAt || leave.updated || new Date().toISOString(),
+      contactNumber: leave.contactNumber || leave.phone || '',
+      remarks: leave.remarks || leave.comments || '',
+      approvedBy: leave.approvedBy,
+      rejectedBy: leave.rejectedBy,
+      approvedAt: leave.approvedAt,
+      rejectedAt: leave.rejectedAt,
+      cancellationReason: leave.cancellationReason,
+      managerRemarks: leave.managerRemarks,
+      emergencyContact: leave.emergencyContact,
+      handoverTo: leave.handoverTo,
+      handoverCompleted: leave.handoverCompleted,
+      handoverRemarks: leave.handoverRemarks,
+      attachmentUrl: leave.attachmentUrl,
+      isManagerLeave: leave.isManagerLeave === true || leave.managerId ? true : false,
+      isSupervisorLeave: leave.isSupervisorLeave === true,
+      managerId: leave.managerId,
+      supervisorId: leave.supervisorId,
+      site: leave.site || leave.location || 'Main Site',
+      siteId: leave.siteId,
+      priority: leave.priority || 'medium',
+      position: leave.position,
+      email: leave.email
+    }));
+    
+    console.log(`✅ Transformed ${transformedLeaves.length} leave requests`);
+    return transformedLeaves;
+  } catch (error: any) {
+    console.error('❌ Error fetching leaves:', error);
+    toast.error(`Failed to fetch leaves: ${error.message}`);
+    return [];
+  }
+};
 
-  const updateStats = () => {
-    const stats = {
-      total: leaveRequests.length,
-      pending: leaveRequests.filter(l => l.status === 'pending').length,
-      approved: leaveRequests.filter(l => l.status === 'approved').length,
-      rejected: leaveRequests.filter(l => l.status === 'rejected').length,
-      cancelled: leaveRequests.filter(l => l.status === 'cancelled').length,
-      urgent: leaveRequests.filter(l => l.priority === 'urgent').length,
-      escalated: leaveRequests.filter(l => (l.escalationLevel || 0) > 0).length
-    };
-    setStats(stats);
-  };
-
-  const fetchDepartments = async () => {
-    try {
-      const response = await fetch(`${API_URL}/leaves/departments`);
-      if (response.ok) {
-        const departments = await response.json();
-        console.log("📋 Available departments:", departments);
-        
-        if (departments && departments.length > 0) {
-          setAvailableDepartments(departments);
-          if (!managerDepartment) {
-            setManagerDepartment(departments[0]);
-          }
-        } else {
-          const defaultDepartments = ["Consumables Management", "Housekeeping Management", "Security Management"];
-          setAvailableDepartments(defaultDepartments);
-          if (!managerDepartment) {
-            setManagerDepartment(defaultDepartments[0]);
-          }
-        }
-      } else {
-        throw new Error("Failed to fetch departments");
-      }
-    } catch (error) {
-      console.error("Error fetching departments:", error);
-      const defaultDepartments = ["Consumables Management", "Housekeeping Management", "Security Management"];
-      setAvailableDepartments(defaultDepartments);
-      if (!managerDepartment) {
-        setManagerDepartment(defaultDepartments[0]);
-      }
-    }
-  };
-
-  const fetchLeaveRequests = async () => {
-    if (!managerDepartment) {
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      let url = `${API_URL}/leaves/supervisor?department=${encodeURIComponent(managerDepartment)}`;
-      
-      // Use site ID instead of site name
-      if (selectedSite && selectedSite._id) {
-        url += `&siteId=${encodeURIComponent(selectedSite._id)}`;
-      } else if (selectedSite && selectedSite.name) {
-        // Fallback to site name if _id is not available
-        url += `&site=${encodeURIComponent(selectedSite.name)}`;
-      }
-
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch leaves');
-      }
-      
-      const data = await response.json();
-      console.log("✅ Team leaves data received:", data);
-      
-      const formattedData = data.map((leave: any) => ({
-        ...leave,
-        id: leave._id || leave.id,
-        priority: leave.priority || 'medium',
-        escalationLevel: leave.escalationLevel || 0
-      }));
-      setLeaveRequests(formattedData);
-    } catch (error: any) {
-      console.error("Error fetching leave requests:", error);
-      toast.error(error.message || "Failed to load leave requests");
-      setLeaveRequests([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchMyLeaves = async () => {
-    if (!managerInfo._id) {
-      console.log("Manager info not available yet");
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `${API_URL}/manager-leaves?managerId=${encodeURIComponent(managerInfo._id)}`
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch manager leaves: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        const formattedData = data.leaves.map((leave: any) => ({
-          ...leave,
-          id: leave._id || leave.id,
-          _id: leave._id || leave.id,
-          isManagerLeave: true,
-          employeeId: leave.managerId,
-          employeeName: leave.managerName,
-          department: leave.managerDepartment,
-          contactNumber: leave.managerContact,
-          appliedDate: leave.appliedDate || leave.createdAt
-        }));
-        
-        setMyLeaves(formattedData);
-      }
-    } catch (error) {
-      console.error("Error fetching manager's leaves:", error);
-      setMyLeaves([]);
-    }
-  };
-
-  const fetchEmployees = async () => {
-    if (!managerDepartment) {
-      return;
-    }
-
-    try {
-      setIsLoadingEmployees(true);
-      
-      let url = `${API_URL}/leaves/supervisor/employees?department=${encodeURIComponent(managerDepartment)}`;
-      // Use site ID instead of site name
-      if (selectedSite && selectedSite._id) {
-        url += `&siteId=${encodeURIComponent(selectedSite._id)}`;
-      } else if (selectedSite && selectedSite.name) {
-        // Fallback to site name if _id is not available
-        url += `&site=${encodeURIComponent(selectedSite.name)}`;
-      }
-      
-      const response = await fetch(url);
-      
+// Fetch manager's own leaves
+const fetchMyManagerLeaves = async (managerId: string): Promise<ManagerLeaveRequest[]> => {
+  if (!managerId) {
+    console.log('❌ No manager ID provided');
+    return [];
+  }
+  
+  try {
+    console.log('🔄 Fetching manager leaves for:', managerId);
+    console.log('📍 Endpoint:', `${API_URL}/manager-leaves?managerId=${managerId}`);
+    
+    const response = await fetch(`${API_URL}/manager-leaves?managerId=${managerId}&limit=100`);
+    
+    if (!response.ok) {
       if (response.status === 404) {
-        throw new Error(`API endpoint not found: ${url}. Check server routes.`);
+        console.warn('⚠️ Manager leaves endpoint not found. Make sure backend is running and routes are configured.');
+        toast.warning('Manager leaves API not available. Some features may be limited.');
+        return [];
       }
-      
-      const data = await response.json();
-      
-      if (data.message && data.message.includes("No active employees found")) {
-        console.log(`ℹ️ No employees found in ${managerDepartment} department`);
-        setEmployees([]);
-        
-        if (data.availableDepartments && data.availableDepartments.length > 0) {
-          toast.info(`No employees in ${managerDepartment}. Try: ${data.availableDepartments.join(', ')}`, {
-            duration: 5000,
-          });
-          setAvailableDepartments(data.availableDepartments);
-        }
-      } else if (Array.isArray(data)) {
-        console.log(`✅ Found ${data.length} employees in ${managerDepartment}`);
-        setEmployees(data);
-      } else {
-        throw new Error("Unexpected response format from server");
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('📥 Manager leaves API response:', data);
+    
+    let leavesData = [];
+    
+    if (data?.success && Array.isArray(data.data)) {
+      leavesData = data.data;
+    } else if (Array.isArray(data)) {
+      leavesData = data;
+    } else if (data?.leaves && Array.isArray(data.leaves)) {
+      leavesData = data.leaves;
+    }
+    
+    console.log(`✅ Found ${leavesData.length} manager leaves`);
+    return leavesData;
+  } catch (error: any) {
+    console.error('❌ Error fetching manager leaves:', error);
+    toast.error(`Failed to fetch manager leaves: ${error.message}`);
+    return [];
+  }
+};
+
+// Fetch employees from API
+const fetchEmployees = async (): Promise<Employee[]> => {
+  try {
+    console.log('🔄 Fetching employees from API...');
+    
+    const response = await fetch(`${API_URL}/employees?limit=1000`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    let employeesData = [];
+    
+    if (Array.isArray(data)) {
+      employeesData = data;
+    } else if (data?.success && Array.isArray(data.data)) {
+      employeesData = data.data;
+    } else if (data?.employees && Array.isArray(data.employees)) {
+      employeesData = data.employees;
+    } else if (data?.data && Array.isArray(data.data.employees)) {
+      employeesData = data.data.employees;
+    }
+    
+    console.log(`📊 Raw employees data count: ${employeesData.length}`);
+    
+    const transformedEmployees: Employee[] = employeesData.map((emp: any) => ({
+      _id: emp._id || emp.id,
+      employeeId: emp.employeeId || emp.employeeID || emp.empId || `EMP${String(Math.random()).slice(2, 6)}`,
+      name: emp.name || emp.employeeName || emp.fullName || "Unknown Employee",
+      email: emp.email || "",
+      contactNumber: emp.phone || emp.mobile || emp.contactNumber || "",
+      department: emp.department || emp.dept || "Unknown Department",
+      position: emp.position || emp.designation || emp.role || "Employee",
+      site: emp.site || emp.siteName || emp.location || "Main Site",
+      isActive: emp.status === 'active' || emp.isActive === true,
+      isSupervisor: emp.role === 'supervisor' || emp.isSupervisor === true || emp.position?.toLowerCase().includes('supervisor'),
+      role: emp.role || 'employee'
+    }));
+    
+    console.log(`✅ Transformed ${transformedEmployees.length} employees`);
+    return transformedEmployees;
+  } catch (error: any) {
+    console.error('❌ Error fetching employees:', error);
+    toast.error(`Failed to fetch employees: ${error.message}`);
+    return [];
+  }
+};
+
+// Fetch sites where manager is assigned
+const fetchManagerSites = async (managerId: string): Promise<Site[]> => {
+  try {
+    console.log('🔄 Fetching sites for manager:', managerId);
+    
+    const response = await fetch(`${API_URL}/sites?limit=100`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    let sitesData = [];
+    
+    if (Array.isArray(data)) {
+      sitesData = data;
+    } else if (data?.success && Array.isArray(data.data)) {
+      sitesData = data.data;
+    } else if (data?.sites && Array.isArray(data.sites)) {
+      sitesData = data.sites;
+    } else if (data?.data && Array.isArray(data.data.sites)) {
+      sitesData = data.data.sites;
+    }
+    
+    console.log(`📊 Raw sites data count: ${sitesData.length}`);
+    
+    const transformedSites: Site[] = sitesData.map((site: any) => ({
+      _id: site._id || site.id,
+      name: site.name || site.siteName || 'Unknown Site',
+      clientName: site.clientName || site.client || '',
+      location: site.location || site.address || '',
+      status: site.status || 'active',
+      managerCount: site.managerCount || 0,
+      supervisorCount: site.supervisorCount || 0,
+      employeeCount: site.employeeCount || 0
+    }));
+    
+    console.log(`✅ Transformed ${transformedSites.length} sites`);
+    return transformedSites.slice(0, 10);
+  } catch (error: any) {
+    console.error('❌ Error fetching sites:', error);
+    return [];
+  }
+};
+
+// Generate site leave data
+const generateSiteLeaveData = async (site: Site, date: string, allLeaves: LeaveRequest[]): Promise<SiteLeaveData> => {
+  try {
+    const allEmployees = await fetchEmployees();
+    
+    const siteEmployees = allEmployees.filter(emp => 
+      emp.site === site.name || emp.site === site._id
+    );
+    
+    const employeeIds = new Set(siteEmployees.map(emp => emp._id));
+    const employeeNames = new Set(siteEmployees.map(emp => emp.name));
+    
+    const siteLeaves = allLeaves.filter(leave => 
+      employeeIds.has(leave.employeeId) || 
+      employeeNames.has(leave.employeeName) ||
+      leave.site === site.name ||
+      leave.siteId === site._id
+    );
+    
+    const pendingLeaves = siteLeaves.filter(l => l.status === 'pending').length;
+    const approvedLeaves = siteLeaves.filter(l => l.status === 'approved').length;
+    const rejectedLeaves = siteLeaves.filter(l => l.status === 'rejected').length;
+    const cancelledLeaves = siteLeaves.filter(l => l.status === 'cancelled').length;
+    const supervisorLeaves = siteLeaves.filter(l => l.isSupervisorLeave).length;
+    const managerLeaves = siteLeaves.filter(l => l.isManagerLeave).length;
+    const employeeLeaves = siteLeaves.filter(l => !l.isSupervisorLeave && !l.isManagerLeave).length;
+    
+    return {
+      id: site._id,
+      siteId: site._id,
+      name: site.name,
+      siteName: site.name,
+      clientName: site.clientName,
+      location: site.location,
+      totalEmployees: siteEmployees.length,
+      pendingLeaves,
+      approvedLeaves,
+      rejectedLeaves,
+      cancelledLeaves,
+      supervisorLeaves,
+      employeeLeaves,
+      managerLeaves,
+      date,
+      employees: siteEmployees,
+      isRealData: siteEmployees.length > 0,
+      leaves: siteLeaves
+    };
+  } catch (error) {
+    console.error('Error generating site leave data:', error);
+    return {
+      id: site._id,
+      siteId: site._id,
+      name: site.name,
+      siteName: site.name,
+      clientName: site.clientName,
+      location: site.location,
+      totalEmployees: 0,
+      pendingLeaves: 0,
+      approvedLeaves: 0,
+      rejectedLeaves: 0,
+      cancelledLeaves: 0,
+      supervisorLeaves: 0,
+      employeeLeaves: 0,
+      managerLeaves: 0,
+      date,
+      employees: [],
+      isRealData: false,
+      leaves: []
+    };
+  }
+};
+
+// View Leave Details Dialog Component
+interface ViewLeaveDialogProps {
+  leave: LeaveRequest | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApprove?: (leaveId: string, remarks: string) => Promise<void>;
+  onReject?: (leaveId: string, remarks: string) => Promise<void>;
+  onRevertToPending?: (leaveId: string, remarks: string) => Promise<void>;
+}
+
+const ViewLeaveDialog: React.FC<ViewLeaveDialogProps> = ({ 
+  leave, 
+  open, 
+  onOpenChange,
+  onApprove,
+  onReject,
+  onRevertToPending
+}) => {
+  const [actionDialog, setActionDialog] = useState<ActionDialogState>({
+    open: false,
+    type: null,
+    leaveId: null,
+    leaveDetails: null,
+    remarks: ''
+  });
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  if (!leave) return null;
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'rejected':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'pending':
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case 'cancelled':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getLeaveTypeBadge = (type: string) => {
+    switch (type) {
+      case 'annual':
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case 'sick':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'casual':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'maternity':
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case 'paternity':
+        return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case 'bereavement':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getRoleBadge = () => {
+    if (leave.isManagerLeave) {
+      return <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">Manager</Badge>;
+    } else if (leave.isSupervisorLeave) {
+      return <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300">Supervisor</Badge>;
+    } else {
+      return <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300">Employee</Badge>;
+    }
+  };
+
+  const handleAction = async () => {
+    setIsProcessing(true);
+    try {
+      if (actionDialog.type === 'approve' && onApprove) {
+        await onApprove(actionDialog.leaveId!, actionDialog.remarks);
+      } else if (actionDialog.type === 'reject' && onReject) {
+        await onReject(actionDialog.leaveId!, actionDialog.remarks);
+      } else if (actionDialog.type === 'pending' && onRevertToPending) {
+        await onRevertToPending(actionDialog.leaveId!, actionDialog.remarks);
       }
-    } catch (error: any) {
-      console.error("❌ Error fetching employees:", error);
-      setEmployees([]);
+      setActionDialog({ open: false, type: null, leaveId: null, leaveDetails: null, remarks: '' });
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Error performing action:', error);
+      toast.error('Failed to perform action');
     } finally {
-      setIsLoadingEmployees(false);
+      setIsProcessing(false);
     }
   };
 
-  const fetchDelegation = async () => {
-    try {
-      const response = await fetch(`${API_URL}/delegation?managerId=${managerInfo._id}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.delegation) {
-          setDelegation(data.delegation);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching delegation:", error);
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <FileText className="h-5 w-5 text-primary" />
+              Leave Request Details
+            </DialogTitle>
+            <DialogDescription>
+              Detailed information for {leave.employeeName}'s leave request
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6">
+            {/* Status Banner */}
+            <div className={`p-4 rounded-lg border ${
+              leave.status === 'approved' ? 'bg-green-50 border-green-200' :
+              leave.status === 'rejected' ? 'bg-red-50 border-red-200' :
+              leave.status === 'pending' ? 'bg-yellow-50 border-yellow-200' :
+              'bg-gray-50 border-gray-200'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {leave.status === 'approved' && <CheckCircle className="h-6 w-6 text-green-600" />}
+                  {leave.status === 'rejected' && <XCircle className="h-6 w-6 text-red-600" />}
+                  {leave.status === 'pending' && <Clock className="h-6 w-6 text-yellow-600" />}
+                  {leave.status === 'cancelled' && <XCircle className="h-6 w-6 text-gray-600" />}
+                  <div>
+                    <p className="font-semibold text-lg capitalize">{leave.status}</p>
+                    {leave.approvedBy && (
+                      <p className="text-sm text-muted-foreground">
+                        by {leave.approvedBy} on {formatDateTimeDisplay(leave.approvedAt || '')}
+                      </p>
+                    )}
+                    {leave.rejectedBy && (
+                      <p className="text-sm text-muted-foreground">
+                        by {leave.rejectedBy} on {formatDateTimeDisplay(leave.rejectedAt || '')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {getRoleBadge()}
+              </div>
+            </div>
+
+            {/* Employee Information */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Employee Information</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Name:</span>
+                    <span className="text-sm font-medium">{leave.employeeName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">ID:</span>
+                    <span className="text-sm font-medium">{leave.employeeId}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Department:</span>
+                    <span className="text-sm font-medium">{leave.department}</span>
+                  </div>
+                  {leave.position && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Position:</span>
+                      <span className="text-sm font-medium">{leave.position}</span>
+                    </div>
+                  )}
+                  {leave.email && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Email:</span>
+                      <span className="text-sm font-medium">{leave.email}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Contact:</span>
+                    <span className="text-sm font-medium">{leave.contactNumber}</span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Leave Details</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Leave Type:</span>
+                    <Badge className={getLeaveTypeBadge(leave.leaveType)}>
+                      {leave.leaveType}
+                    </Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">From Date:</span>
+                    <span className="text-sm font-medium">{formatDateDisplay(leave.fromDate)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">To Date:</span>
+                    <span className="text-sm font-medium">{formatDateDisplay(leave.toDate)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Total Days:</span>
+                    <span className="text-sm font-bold">{leave.totalDays}</span>
+                  </div>
+                  {leave.handoverTo && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Handover To:</span>
+                      <span className="text-sm font-medium">{leave.handoverTo}</span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Reason */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Reason</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm bg-muted/30 p-3 rounded-lg">{leave.reason}</p>
+              </CardContent>
+            </Card>
+
+            {/* Remarks */}
+            {leave.remarks && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">Manager Remarks</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm bg-muted/30 p-3 rounded-lg">{leave.remarks}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Additional Information */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Additional Information</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Applied By:</span>
+                  <span className="text-sm font-medium">{leave.appliedBy}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Applied On:</span>
+                  <span className="text-sm font-medium">{formatDateTimeDisplay(leave.createdAt)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Last Updated:</span>
+                  <span className="text-sm font-medium">{formatDateTimeDisplay(leave.updatedAt)}</span>
+                </div>
+                {leave.site && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Site:</span>
+                    <span className="text-sm font-medium">{leave.site}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Action Buttons */}
+            {leave.status === 'pending' && (
+              <div className="flex gap-3 justify-end pt-4 border-t">
+                <Button variant="outline" onClick={() => onOpenChange(false)}>
+                  Close
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => setActionDialog({
+                    open: true,
+                    type: 'reject',
+                    leaveId: leave._id,
+                    leaveDetails: leave,
+                    remarks: ''
+                  })}
+                >
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Reject
+                </Button>
+                <Button
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => setActionDialog({
+                    open: true,
+                    type: 'approve',
+                    leaveId: leave._id,
+                    leaveDetails: leave,
+                    remarks: ''
+                  })}
+                >
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  Approve
+                </Button>
+              </div>
+            )}
+
+            {(leave.status === 'approved' || leave.status === 'rejected') && (
+              <div className="flex gap-3 justify-end pt-4 border-t">
+                <Button variant="outline" onClick={() => onOpenChange(false)}>
+                  Close
+                </Button>
+                <Button
+                  variant="outline"
+                  className="bg-yellow-50 hover:bg-yellow-100 border-yellow-200"
+                  onClick={() => setActionDialog({
+                    open: true,
+                    type: 'pending',
+                    leaveId: leave._id,
+                    leaveDetails: leave,
+                    remarks: ''
+                  })}
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Revert to Pending
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Action Remarks Dialog */}
+      <Dialog open={actionDialog.open} onOpenChange={(open) => setActionDialog(prev => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {actionDialog.type === 'approve' && <CheckCircle className="h-5 w-5 text-green-600" />}
+              {actionDialog.type === 'reject' && <XCircle className="h-5 w-5 text-red-600" />}
+              {actionDialog.type === 'pending' && <RotateCcw className="h-5 w-5 text-yellow-600" />}
+              {actionDialog.type === 'approve' && 'Approve Leave Request'}
+              {actionDialog.type === 'reject' && 'Reject Leave Request'}
+              {actionDialog.type === 'pending' && 'Revert to Pending'}
+            </DialogTitle>
+            <DialogDescription>
+              {actionDialog.type === 'approve' && 'Add remarks for approving this leave request'}
+              {actionDialog.type === 'reject' && 'Please provide a reason for rejecting this leave request'}
+              {actionDialog.type === 'pending' && 'Add remarks for reverting this leave request to pending'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="remarks">Remarks</Label>
+              <Textarea
+                id="remarks"
+                value={actionDialog.remarks}
+                onChange={(e) => setActionDialog(prev => ({ ...prev, remarks: e.target.value }))}
+                placeholder={actionDialog.type === 'reject' ? "Required: Reason for rejection" : "Optional remarks"}
+                rows={4}
+                required={actionDialog.type === 'reject'}
+              />
+              {actionDialog.type === 'reject' && !actionDialog.remarks && (
+                <p className="text-xs text-red-500">Reason is required for rejection</p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" onClick={() => setActionDialog(prev => ({ ...prev, open: false }))}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAction}
+              disabled={isProcessing || (actionDialog.type === 'reject' && !actionDialog.remarks)}
+              className={
+                actionDialog.type === 'approve' ? 'bg-green-600 hover:bg-green-700' :
+                actionDialog.type === 'reject' ? 'bg-red-600 hover:bg-red-700' :
+                'bg-yellow-600 hover:bg-yellow-700'
+              }
+            >
+              {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {actionDialog.type === 'approve' && 'Approve'}
+              {actionDialog.type === 'reject' && 'Reject'}
+              {actionDialog.type === 'pending' && 'Revert'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+// View Manager Leave Details Dialog Component - FIXED VERSION
+interface ViewManagerLeaveDialogProps {
+  leave: ManagerLeaveRequest | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onEdit?: (leave: ManagerLeaveRequest) => void;
+  onDelete?: (leave: ManagerLeaveRequest) => void;
+  onDeleteById?: (leaveId: string) => void;
+}
+
+const ViewManagerLeaveDialog: React.FC<ViewManagerLeaveDialogProps> = ({ 
+  leave, 
+  open, 
+  onOpenChange,
+  onEdit,
+  onDelete,
+  onDeleteById
+}) => {
+  if (!leave) return null;
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'rejected':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'pending':
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case 'cancelled':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
     }
   };
 
-  const fetchAnalytics = async () => {
-    try {
-      const response = await fetch(`${API_URL}/leaves/analytics?managerId=${managerInfo._id}`);
-      if (response.ok) {
-        const data = await response.json();
-        setAnalytics(data);
-      }
-    } catch (error) {
-      console.error("Error fetching analytics:", error);
+  const getLeaveTypeBadge = (type: string) => {
+    switch (type) {
+      case 'annual':
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case 'sick':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'casual':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'maternity':
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case 'paternity':
+        return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case 'bereavement':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      case 'unpaid':
+        return "bg-orange-100 text-orange-800 border-orange-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
     }
   };
 
-  const calculateTotalDays = (from: string, to: string) => {
-    if (!from || !to) return 0;
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
-    const timeDiff = toDate.getTime() - fromDate.getTime();
-    return Math.ceil(timeDiff / (1000 * 3600 * 24)) + 1;
-  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-xl">
+            <Crown className="h-5 w-5 text-primary" />
+            Manager Leave Request Details
+          </DialogTitle>
+          <DialogDescription>
+            Detailed information for your leave request
+          </DialogDescription>
+        </DialogHeader>
 
-  const handleApproveLeave = async (leaveId: string) => {
-    if (!leaveId) {
-      toast.error("Leave ID is required");
-      return;
-    }
+        <div className="space-y-6">
+          {/* Status Banner */}
+          <div className={`p-4 rounded-lg border ${
+            leave.status === 'approved' ? 'bg-green-50 border-green-200' :
+            leave.status === 'rejected' ? 'bg-red-50 border-red-200' :
+            leave.status === 'pending' ? 'bg-yellow-50 border-yellow-200' :
+            'bg-gray-50 border-gray-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {leave.status === 'approved' && <CheckCircle className="h-6 w-6 text-green-600" />}
+                {leave.status === 'rejected' && <XCircle className="h-6 w-6 text-red-600" />}
+                {leave.status === 'pending' && <Clock className="h-6 w-6 text-yellow-600" />}
+                {leave.status === 'cancelled' && <XCircle className="h-6 w-6 text-gray-600" />}
+                <div>
+                  <p className="font-semibold text-lg capitalize">{leave.status}</p>
+                  {leave.approvedBy && (
+                    <p className="text-sm text-muted-foreground">
+                      by {leave.approvedBy} on {formatDateTimeDisplay(leave.approvedAt || '')}
+                    </p>
+                  )}
+                  {leave.rejectedBy && (
+                    <p className="text-sm text-muted-foreground">
+                      by {leave.rejectedBy} on {formatDateTimeDisplay(leave.rejectedAt || '')}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">
+                <Crown className="mr-1 h-3 w-3" />
+                Manager
+              </Badge>
+            </div>
+          </div>
 
-    if (!isOnline) {
-      queueAction('approve', leaveId);
-      return;
-    }
+          {/* Manager Information */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Manager Information</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Name:</span>
+                  <span className="text-sm font-medium">{leave.managerName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">ID:</span>
+                  <span className="text-sm font-medium">{leave.managerId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Department:</span>
+                  <span className="text-sm font-medium">{leave.managerDepartment}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Position:</span>
+                  <span className="text-sm font-medium">{leave.managerPosition || 'Manager'}</span>
+                </div>
+                {leave.managerEmail && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Email:</span>
+                    <span className="text-sm font-medium">{leave.managerEmail}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Contact:</span>
+                  <span className="text-sm font-medium">{leave.managerContact}</span>
+                </div>
+              </CardContent>
+            </Card>
 
-    try {
-      const response = await fetch(`${API_URL}/leaves/${leaveId}/status`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          status: 'approved',
-          managerId: managerInfo._id,
-          managerName: managerInfo.name,
-          managerDepartment: managerInfo.department,
-          remarks: 'Approved by manager'
-        }),
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Leave Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Leave Type:</span>
+                  <Badge className={getLeaveTypeBadge(leave.leaveType)}>
+                    {leave.leaveType}
+                  </Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">From Date:</span>
+                  <span className="text-sm font-medium">{formatDateDisplay(leave.fromDate)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">To Date:</span>
+                  <span className="text-sm font-medium">{formatDateDisplay(leave.toDate)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Total Days:</span>
+                  <span className="text-sm font-bold">{leave.totalDays}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Reason */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Reason</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm bg-muted/30 p-3 rounded-lg">{leave.reason}</p>
+            </CardContent>
+          </Card>
+
+          {/* Superadmin Remarks */}
+          {leave.superadminRemarks && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Superadmin Remarks</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm bg-muted/30 p-3 rounded-lg">{leave.superadminRemarks}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Additional Information */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Additional Information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Applied By:</span>
+                <span className="text-sm font-medium">{leave.appliedBy}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Applied On:</span>
+                <span className="text-sm font-medium">{formatDateTimeDisplay(leave.appliedDate)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">Last Updated:</span>
+                <span className="text-sm font-medium">{formatDateTimeDisplay(leave.updatedAt)}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Action Buttons - FIXED DELETE BUTTON */}
+          {leave.status === 'pending' && (
+            <div className="flex gap-3 justify-end pt-4 border-t">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (onDeleteById) {
+                    // Use the ID-based delete handler
+                    onDeleteById(leave._id);
+                    onOpenChange(false);
+                  } else if (onDelete) {
+                    // Fallback to object-based delete handler
+                    onDelete(leave);
+                    onOpenChange(false);
+                  }
+                }}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </Button>
+              <Button
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => {
+                  if (onEdit) {
+                    onEdit(leave);
+                    onOpenChange(false);
+                  }
+                }}
+              >
+                <Edit className="mr-2 h-4 w-4" />
+                Edit
+              </Button>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// Edit Manager Leave Dialog Component
+interface EditManagerLeaveDialogProps {
+  leave: ManagerLeaveRequest | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (leaveId: string, data: any) => Promise<void>;
+}
+
+const EditManagerLeaveDialog: React.FC<EditManagerLeaveDialogProps> = ({ 
+  leave, 
+  open, 
+  onOpenChange,
+  onSave
+}) => {
+  const [formData, setFormData] = useState({
+    leaveType: '',
+    fromDate: '',
+    toDate: '',
+    reason: ''
+  });
+  const [formErrors, setFormErrors] = useState({
+    leaveType: '',
+    fromDate: '',
+    toDate: '',
+    reason: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (leave) {
+      setFormData({
+        leaveType: leave.leaveType,
+        fromDate: leave.fromDate?.split('T')[0] || '',
+        toDate: leave.toDate?.split('T')[0] || '',
+        reason: leave.reason
       });
-      
-      if (!response.ok) {
-        throw new Error('Failed to approve leave');
-      }
-      
-      const data = await response.json();
-      toast.success(data.message || "Leave request approved!");
-      
-      setLeaveRequests(prev => 
-        prev.map(leave => {
-          const leaveIdToCompare = leave._id || leave.id;
-          if (leaveIdToCompare === leaveId) {
-            return { 
-              ...leave, 
-              status: 'approved',
-              approvedBy: managerInfo.name,
-              approvedAt: new Date().toISOString(),
-              remarks: 'Approved by manager'
-            };
-          }
-          return leave;
-        })
-      );
-      
-      setMyLeaves(prev =>
-        prev.map(leave => {
-          const leaveIdToCompare = leave._id || leave.id;
-          if (leaveIdToCompare === leaveId) {
-            return { 
-              ...leave, 
-              status: 'approved',
-              approvedBy: managerInfo.name,
-              approvedAt: new Date().toISOString(),
-              remarks: 'Approved by manager'
-            };
-          }
-          return leave;
-        })
-      );
-      
-      if (selectedLeave && (selectedLeave._id === leaveId || selectedLeave.id === leaveId)) {
-        setViewDialogOpen(false);
-      }
-      
-      fetchLeaveRequests();
-      fetchMyLeaves();
-    } catch (error: any) {
-      console.error("❌ Error approving leave:", error);
-      toast.error(error.message || "Failed to approve leave");
     }
-  };
+  }, [leave]);
 
-  const handleRejectLeave = async (leaveId: string) => {
-    if (!leaveId) {
-      toast.error("Leave ID is required");
-      return;
-    }
-
-    if (!isOnline) {
-      queueAction('reject', leaveId);
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_URL}/leaves/${leaveId}/status`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          status: 'rejected',
-          managerId: managerInfo._id,
-          managerName: managerInfo.name,
-          managerDepartment: managerInfo.department,
-          remarks: 'Rejected by manager'
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to reject leave');
-      }
-      
-      const data = await response.json();
-      toast.success(data.message || "Leave request rejected!");
-      
-      setLeaveRequests(prev => 
-        prev.map(leave => {
-          const leaveIdToCompare = leave._id || leave.id;
-          if (leaveIdToCompare === leaveId) {
-            return { 
-              ...leave, 
-              status: 'rejected',
-              rejectedBy: managerInfo.name,
-              rejectedAt: new Date().toISOString(),
-              remarks: 'Rejected by manager'
-            };
-          }
-          return leave;
-        })
-      );
-      
-      setMyLeaves(prev =>
-        prev.map(leave => {
-          const leaveIdToCompare = leave._id || leave.id;
-          if (leaveIdToCompare === leaveId) {
-            return { 
-              ...leave, 
-              status: 'rejected',
-              rejectedBy: managerInfo.name,
-              rejectedAt: new Date().toISOString(),
-              remarks: 'Rejected by manager'
-            };
-          }
-          return leave;
-        })
-      );
-      
-      if (selectedLeave && (selectedLeave._id === leaveId || selectedLeave.id === leaveId)) {
-        setViewDialogOpen(false);
-      }
-      
-      fetchLeaveRequests();
-      fetchMyLeaves();
-    } catch (error: any) {
-      console.error("❌ Error rejecting leave:", error);
-      toast.error(error.message || "Failed to reject leave");
-    }
-  };
-
-  const handleBulkAction = async (action: 'approve' | 'reject') => {
-    if (selectedLeaves.length === 0) {
-      toast.error("Please select at least one leave request");
-      return;
-    }
-
-    if (!isOnline) {
-      selectedLeaves.forEach(leaveId => {
-        queueAction(action, leaveId);
-      });
-      setSelectedLeaves([]);
-      setBulkDialogOpen(false);
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_URL}/leaves/bulk/status`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          leaveIds: selectedLeaves,
-          status: action === 'approve' ? 'approved' : 'rejected',
-          managerId: managerInfo._id,
-          managerName: managerInfo.name
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to ${action} leaves`);
-      }
-      
-      const data = await response.json();
-      toast.success(data.message || `Successfully ${action}d ${selectedLeaves.length} leave(s)`);
-      
-      // Update local state
-      if (action === 'approve') {
-        setLeaveRequests(prev => 
-          prev.map(leave => {
-            if (selectedLeaves.includes(leave._id || leave.id || '')) {
-              return { 
-                ...leave, 
-                status: 'approved',
-                approvedBy: managerInfo.name,
-                approvedAt: new Date().toISOString()
-              };
-            }
-            return leave;
-          })
-        );
-      } else {
-        setLeaveRequests(prev => 
-          prev.map(leave => {
-            if (selectedLeaves.includes(leave._id || leave.id || '')) {
-              return { 
-                ...leave, 
-                status: 'rejected',
-                rejectedBy: managerInfo.name,
-                rejectedAt: new Date().toISOString()
-              };
-            }
-            return leave;
-          })
-        );
-      }
-      
-      setSelectedLeaves([]);
-      setBulkDialogOpen(false);
-      fetchLeaveRequests();
-    } catch (error: any) {
-      console.error(`Error ${action}ing leaves:`, error);
-      toast.error(error.message || `Failed to ${action} leaves`);
-    }
-  };
-
-  const queueAction = (action: 'approve' | 'reject', leaveId: string) => {
-    const pendingAction = {
-      action,
-      leaveId,
-      managerId: managerInfo._id,
-      managerName: managerInfo.name,
-      timestamp: new Date().toISOString()
+  const validateForm = (): boolean => {
+    const errors = {
+      leaveType: '',
+      fromDate: '',
+      toDate: '',
+      reason: ''
     };
     
-    const updatedActions = [...pendingActions, pendingAction];
-    setPendingActions(updatedActions);
-    localStorage.setItem('pendingLeaveActions', JSON.stringify(updatedActions));
+    let isValid = true;
     
-    toast.warning(`Action queued. Will sync when online (${pendingActions.length + 1} pending)`, {
-      duration: 5000,
-    });
+    if (!formData.leaveType) {
+      errors.leaveType = 'Please select leave type';
+      isValid = false;
+    }
+    
+    if (!formData.fromDate) {
+      errors.fromDate = 'Please select from date';
+      isValid = false;
+    }
+    
+    if (!formData.toDate) {
+      errors.toDate = 'Please select to date';
+      isValid = false;
+    }
+    
+    if (!formData.reason.trim()) {
+      errors.reason = 'Please enter reason for leave';
+      isValid = false;
+    }
+    
+    setFormErrors(errors);
+    return isValid;
   };
 
-  const syncPendingActions = async () => {
-    if (pendingActions.length === 0 || !isOnline) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     
-    toast.info(`Syncing ${pendingActions.length} pending actions...`);
+    if (!leave) return;
     
+    if (!validateForm()) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    const fromDate = new Date(formData.fromDate);
+    const toDate = new Date(formData.toDate);
+    
+    if (fromDate > toDate) {
+      toast.error('From date must be before to date');
+      return;
+    }
+
+    const totalDays = calculateDaysBetween(formData.fromDate, formData.toDate);
+
+    setIsSubmitting(true);
     try {
-      for (const action of pendingActions) {
-        if (action.action === 'approve') {
-          await handleApproveLeave(action.leaveId);
-        } else {
-          await handleRejectLeave(action.leaveId);
-        }
-      }
-      
-      // Clear pending actions after successful sync
-      setPendingActions([]);
-      localStorage.removeItem('pendingLeaveActions');
-      toast.success("All pending actions synced successfully!");
+      await onSave(leave._id, {
+        ...formData,
+        totalDays
+      });
+      onOpenChange(false);
     } catch (error) {
-      console.error("Error syncing pending actions:", error);
-      toast.error("Failed to sync some pending actions");
+      console.error('Error saving:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!leave) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Edit className="h-5 w-5" />
+            Edit Leave Request
+          </DialogTitle>
+          <DialogDescription>
+            Update your leave request details. Only pending requests can be edited.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="edit-leaveType">Leave Type *</Label>
+            <Select
+              value={formData.leaveType}
+              onValueChange={(value) => setFormData(prev => ({ ...prev, leaveType: value }))}
+            >
+              <SelectTrigger className={formErrors.leaveType ? 'border-red-500' : ''}>
+                <SelectValue placeholder="Select leave type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="annual">Annual Leave</SelectItem>
+                <SelectItem value="sick">Sick Leave</SelectItem>
+                <SelectItem value="casual">Casual Leave</SelectItem>
+                <SelectItem value="maternity">Maternity Leave</SelectItem>
+                <SelectItem value="paternity">Paternity Leave</SelectItem>
+                <SelectItem value="bereavement">Bereavement Leave</SelectItem>
+                <SelectItem value="unpaid">Unpaid Leave</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+            {formErrors.leaveType && (
+              <p className="text-xs text-red-500">{formErrors.leaveType}</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-fromDate">From Date *</Label>
+              <Input
+                id="edit-fromDate"
+                type="date"
+                value={formData.fromDate}
+                onChange={(e) => setFormData(prev => ({ ...prev, fromDate: e.target.value }))}
+                className={formErrors.fromDate ? 'border-red-500' : ''}
+                required
+              />
+              {formErrors.fromDate && (
+                <p className="text-xs text-red-500">{formErrors.fromDate}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-toDate">To Date *</Label>
+              <Input
+                id="edit-toDate"
+                type="date"
+                value={formData.toDate}
+                onChange={(e) => setFormData(prev => ({ ...prev, toDate: e.target.value }))}
+                min={formData.fromDate}
+                className={formErrors.toDate ? 'border-red-500' : ''}
+                required
+              />
+              {formErrors.toDate && (
+                <p className="text-xs text-red-500">{formErrors.toDate}</p>
+              )}
+            </div>
+          </div>
+
+          {formData.fromDate && formData.toDate && (
+            <div className="text-sm text-muted-foreground">
+              Total Days: {calculateDaysBetween(formData.fromDate, formData.toDate)} days
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="edit-reason">Reason *</Label>
+            <Textarea
+              id="edit-reason"
+              value={formData.reason}
+              onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
+              placeholder="Please provide a reason for leave"
+              className={formErrors.reason ? 'border-red-500' : ''}
+              rows={3}
+              required
+            />
+            {formErrors.reason && (
+              <p className="text-xs text-red-500">{formErrors.reason}</p>
+            )}
+          </div>
+
+          <DialogFooter className="flex gap-2 pt-4">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Save className="mr-2 h-4 w-4" />
+              Update Leave
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// Site Leave Details Component
+interface SiteLeaveDetailsProps {
+  siteData: SiteLeaveData;
+  onBack: () => void;
+  selectedDate: string;
+  onApprove: (leaveId: string, remarks: string) => Promise<void>;
+  onReject: (leaveId: string, remarks: string) => Promise<void>;
+  onRevertToPending: (leaveId: string, remarks: string) => Promise<void>;
+}
+
+const SiteLeaveDetails: React.FC<SiteLeaveDetailsProps> = ({ 
+  siteData, 
+  onBack, 
+  selectedDate, 
+  onApprove, 
+  onReject,
+  onRevertToPending
+}) => {
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
+  const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    if (siteData?.leaves && siteData.leaves.length > 0) {
+      console.log(`Setting ${siteData.leaves.length} leaves in details view`);
+      setLeaves(siteData.leaves);
+    }
+  }, [siteData?.leaves]);
+
+  const allLeaves = leaves;
+  const pendingLeaves = allLeaves.filter(l => l.status === 'pending');
+  const approvedLeaves = allLeaves.filter(l => l.status === 'approved');
+  const rejectedLeaves = allLeaves.filter(l => l.status === 'rejected');
+  const cancelledLeaves = allLeaves.filter(l => l.status === 'cancelled');
+  const supervisorLeaves = allLeaves.filter(l => l.isSupervisorLeave);
+  const employeeLeaves = allLeaves.filter(l => !l.isSupervisorLeave && !l.isManagerLeave);
+  const managerLeaves = allLeaves.filter(l => l.isManagerLeave);
+
+  const filteredLeaves = useMemo(() => {
+    let filtered = [];
+    switch (activeTab) {
+      case 'pending':
+        filtered = pendingLeaves;
+        break;
+      case 'approved':
+        filtered = approvedLeaves;
+        break;
+      case 'rejected':
+        filtered = rejectedLeaves;
+        break;
+      default:
+        filtered = allLeaves;
+    }
+
+    if (employeeSearch) {
+      filtered = filtered.filter(l =>
+        l.employeeName.toLowerCase().includes(employeeSearch.toLowerCase()) ||
+        (l.employeeId && l.employeeId.toLowerCase().includes(employeeSearch.toLowerCase())) ||
+        l.leaveType.toLowerCase().includes(employeeSearch.toLowerCase())
+      );
+    }
+
+    return filtered;
+  }, [activeTab, employeeSearch, allLeaves, pendingLeaves, approvedLeaves, rejectedLeaves]);
+
+  const paginatedLeaves = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredLeaves.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredLeaves, currentPage]);
+
+  const totalPages = Math.ceil(filteredLeaves.length / itemsPerPage);
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'rejected':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'pending':
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case 'cancelled':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getLeaveTypeBadge = (type: string) => {
+    switch (type) {
+      case 'annual':
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case 'sick':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'casual':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'maternity':
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case 'paternity':
+        return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case 'bereavement':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getRoleBadge = (leave: LeaveRequest) => {
+    if (leave.isManagerLeave) {
+      return <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">Manager</Badge>;
+    } else if (leave.isSupervisorLeave) {
+      return <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300">Supervisor</Badge>;
+    } else {
+      return <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300">Employee</Badge>;
     }
   };
 
   const handleViewLeave = (leave: LeaveRequest) => {
     setSelectedLeave(leave);
     setViewDialogOpen(true);
-    // Fetch comments for this leave
-    fetchComments(leave._id || leave.id || '');
-  };
-
-  const fetchComments = async (leaveId: string) => {
-    try {
-      const response = await fetch(`${API_URL}/leaves/${leaveId}/comments`);
-      if (response.ok) {
-        const data = await response.json();
-        if (selectedLeave) {
-          setSelectedLeave(prev => prev ? { ...prev, comments: data } : null);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching comments:", error);
-    }
-  };
-
-  const handleAddComment = async () => {
-    if (!commentText.trim() || !selectedLeave) return;
-
-    setIsAddingComment(true);
-    try {
-      const comment = {
-        leaveId: selectedLeave._id || selectedLeave.id,
-        userId: managerInfo._id,
-        userName: managerInfo.name,
-        comment: commentText,
-        isManager: true,
-        userRole: 'manager'
-      };
-
-      const response = await fetch(`${API_URL}/leaves/${selectedLeave._id || selectedLeave.id}/comments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(comment)
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (selectedLeave) {
-          setSelectedLeave(prev => prev ? {
-            ...prev,
-            comments: [...(prev.comments || []), data.comment]
-          } : null);
-        }
-        setCommentText("");
-        toast.success("Comment added successfully");
-      }
-    } catch (error) {
-      console.error("Error adding comment:", error);
-      toast.error("Failed to add comment");
-    } finally {
-      setIsAddingComment(false);
-    }
-  };
-
-  // Test the manager leave API endpoint
-  const testManagerLeaveAPI = async () => {
-    try {
-      toast.info("Testing manager leave API endpoint...");
-      
-      // First test if the endpoint exists
-      const testResponse = await fetch(`${API_URL}/manager-leaves/apply`, {
-        method: 'OPTIONS', // Use OPTIONS to check if endpoint exists without sending data
-      });
-      
-      console.log("✅ Manager leave endpoint exists, status:", testResponse.status);
-      
-      // Test with minimal data
-      const testData = {
-        managerId: managerInfo._id || "test_manager_123",
-        managerName: managerInfo.name || "Test Manager",
-        managerDepartment: managerInfo.department || "Test Department",
-        leaveType: "casual",
-        fromDate: new Date().toISOString().split('T')[0],
-        toDate: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Tomorrow
-        totalDays: 1,
-        reason: "Test leave application",
-        appliedBy: managerInfo.name || "Test Manager"
-      };
-      
-      console.log("📤 Test data:", testData);
-      
-      // Make a test POST request
-      const response = await fetch(`${API_URL}/manager-leaves/test`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testData),
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        toast.success(`✅ API test successful: ${result.message || "Endpoint working"}`);
-      } else {
-        const errorText = await response.text();
-        console.error("❌ API test failed:", errorText);
-        toast.error(`API test failed: ${response.status} ${response.statusText}`);
-      }
-      
-    } catch (error) {
-      console.error("❌ API test error:", error);
-      toast.error("Failed to test API endpoint. Check console for details.");
-    }
-  };
-
-  // Fallback function using regular leaves endpoint
-  const handleSubmitManagerLeaveFallback = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Validation
-    if (!formData.appliedBy.trim()) {
-      toast.error("Manager name is required");
-      return;
-    }
-
-    if (!formData.leaveType) {
-      toast.error("Please select leave type");
-      return;
-    }
-
-    if (!formData.fromDate || !formData.toDate) {
-      toast.error("Please select both start and end dates");
-      return;
-    }
-
-    const totalDays = calculateTotalDays(formData.fromDate, formData.toDate);
-    if (totalDays < 1) {
-      toast.error("End date must be after start date");
-      return;
-    }
-
-    if (!formData.reason.trim()) {
-      toast.error("Please provide a reason for leave");
-      return;
-    }
-
-    // Check leave balance
-    const leaveTypeKey = formData.leaveType as keyof LeaveBalance;
-    if (leaveBalance[leaveTypeKey] < totalDays) {
-      toast.error(`Insufficient ${formData.leaveType} leave balance. Available: ${leaveBalance[leaveTypeKey]} days`);
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      
-      // Use the regular leaves endpoint for managers
-      const leaveData = {
-        employeeId: managerInfo._id,
-        employeeName: managerInfo.name,
-        department: managerInfo.department || managerDepartment,
-        leaveType: formData.leaveType,
-        fromDate: formData.fromDate,
-        toDate: formData.toDate,
-        totalDays: totalDays,
-        reason: formData.reason,
-        appliedBy: formData.appliedBy,
-        contactNumber: managerInfo.contactNumber || managerInfo.phone || "0000000000",
-        priority: formData.priority,
-        handoverTo: formData.handoverTo,
-        handoverRemarks: formData.handoverRemarks,
-        isManagerLeave: true,
-        managerId: managerInfo._id,
-        site: managerInfo.site || (selectedSite ? selectedSite.name : "Main Site"),
-        status: "pending"
-      };
-
-      console.log("📤 Submitting manager leave (fallback):", leaveData);
-
-      const response = await fetch(`${API_URL}/leaves/apply`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(leaveData),
-      });
-      
-      const responseText = await response.text();
-      console.log("📥 Raw response:", responseText);
-      
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseError) {
-        throw new Error(`Invalid JSON response`);
-      }
-      
-      if (!response.ok) {
-        throw new Error(data.message || `Server error: ${response.status}`);
-      }
-      
-      toast.success(data.message || "Manager leave submitted successfully!");
-      
-      // Update leave balance
-      setLeaveBalance(prev => ({
-        ...prev,
-        [leaveTypeKey]: prev[leaveTypeKey] - totalDays
-      }));
-      
-      // Reset form
-      setFormData({
-        leaveType: "",
-        fromDate: "",
-        toDate: "",
-        reason: "",
-        appliedBy: managerInfo.name,
-        priority: "medium",
-        handoverTo: "",
-        handoverRemarks: "",
-        attachment: null
-      });
-      
-      setDialogOpen(false);
-      fetchMyLeaves();
-      setActiveTab('my-leaves');
-      
-    } catch (error: any) {
-      console.error("❌ Error in fallback:", error);
-      toast.error(error.message || "Failed to submit leave. Please try again.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Main function to submit manager leave
-  const handleSubmitManagerLeaveMain = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Validation
-    if (!formData.appliedBy.trim()) {
-      toast.error("Manager name is required");
-      return;
-    }
-
-    if (!formData.leaveType) {
-      toast.error("Please select leave type");
-      return;
-    }
-
-    if (!formData.fromDate || !formData.toDate) {
-      toast.error("Please select both start and end dates");
-      return;
-    }
-
-    const totalDays = calculateTotalDays(formData.fromDate, formData.toDate);
-    if (totalDays < 1) {
-      toast.error("End date must be after start date");
-      return;
-    }
-
-    if (!formData.reason.trim()) {
-      toast.error("Please provide a reason for leave");
-      return;
-    }
-
-    // Check leave balance
-    const leaveTypeKey = formData.leaveType as keyof LeaveBalance;
-    if (leaveBalance[leaveTypeKey] < totalDays) {
-      toast.error(`Insufficient ${formData.leaveType} leave balance. Available: ${leaveBalance[leaveTypeKey]} days`);
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      
-      const managerLeaveData = {
-        managerId: managerInfo._id,
-        managerName: managerInfo.name,
-        managerDepartment: managerInfo.department || managerDepartment,
-        managerPosition: managerInfo.position || "Manager",
-        managerEmail: managerInfo.email || "",
-        managerContact: managerInfo.contactNumber || managerInfo.phone || "0000000000",
-        leaveType: formData.leaveType,
-        fromDate: formData.fromDate,
-        toDate: formData.toDate,
-        totalDays: totalDays,
-        reason: formData.reason,
-        appliedBy: formData.appliedBy,
-        priority: formData.priority,
-        handoverTo: formData.handoverTo,
-        handoverRemarks: formData.handoverRemarks,
-        // Add site information if available
-        site: managerInfo.site || (selectedSite ? selectedSite.name : "Main Site"),
-        // Add current timestamp for backend
-        appliedDate: new Date().toISOString(),
-        status: "pending" // Default status
-      };
-
-      console.log("📤 Submitting manager leave data:", managerLeaveData);
-
-      const response = await fetch(`${API_URL}/manager-leaves/apply`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(managerLeaveData),
-      });
-      
-      // Get the response text first to see what's returned
-      const responseText = await response.text();
-      console.log("📥 Raw response:", responseText);
-      
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error("Failed to parse response as JSON:", parseError);
-        throw new Error(`Invalid JSON response: ${responseText.substring(0, 100)}...`);
-      }
-      
-      if (!response.ok) {
-        // Log detailed error information
-        console.error("❌ API Error Details:", {
-          status: response.status,
-          statusText: response.statusText,
-          url: response.url,
-          data: data
-        });
-        
-        throw new Error(data.message || data.error || `Server error: ${response.status} ${response.statusText}`);
-      }
-      
-      console.log("✅ Manager leave submitted successfully:", data);
-      
-      toast.success(data.message || "Manager leave submitted successfully!");
-      
-      // Update leave balance
-      setLeaveBalance(prev => ({
-        ...prev,
-        [leaveTypeKey]: prev[leaveTypeKey] - totalDays
-      }));
-      
-      // Reset form
-      setFormData({
-        leaveType: "",
-        fromDate: "",
-        toDate: "",
-        reason: "",
-        appliedBy: managerInfo.name,
-        priority: "medium",
-        handoverTo: "",
-        handoverRemarks: "",
-        attachment: null
-      });
-      
-      setDialogOpen(false);
-      
-      // Refresh the manager's leaves
-      await fetchMyLeaves();
-      setActiveTab('my-leaves');
-      
-    } catch (error: any) {
-      console.error("❌ Error submitting manager leave request:", error);
-      
-      // More detailed error message
-      let errorMessage = "Failed to submit manager leave request.";
-      
-      if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      if (error.message?.includes("Failed to fetch")) {
-        errorMessage = "Cannot connect to the server. Please check if the backend is running.";
-      }
-      
-      if (error.message?.includes("404")) {
-        errorMessage = "API endpoint not found. Please check the backend routes.";
-      }
-      
-      throw error; // Re-throw to be caught by the combined handler
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Combined handler that tries main endpoint first, then fallback
-  const handleSubmitManagerLeave = async (e: React.FormEvent) => {
-    try {
-      // Try main endpoint first
-      await handleSubmitManagerLeaveMain(e);
-    } catch (mainError: any) {
-      console.log("Main endpoint failed, trying fallback...", mainError.message);
-      
-      // If main endpoint fails with 404 or similar, try fallback
-      if (mainError.message.includes("404") || mainError.message.includes("endpoint not found")) {
-        toast.info("Trying alternative method...");
-        await handleSubmitManagerLeaveFallback(e);
-      } else {
-        // If it's another error, show the original message
-        toast.error(mainError.message || "Failed to submit leave. Please try again.");
-      }
-    }
-  };
-
-  const handleExport = async () => {
-    const leavesToExport = activeTab === 'team-leaves' ? leaveRequests : myLeaves;
-    const tabName = activeTab === 'team-leaves' ? 'team' : 'manager';
-    
-    if (leavesToExport.length === 0) {
-      toast.error("No data to export");
-      return;
-    }
-
-    try {
-      if (exportOptions.format === 'pdf') {
-        // For PDF, use server-side generation
-        toast.info("Generating PDF report...");
-        const response = await fetch(`${API_URL}/export/leaves/pdf`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            leaves: leavesToExport,
-            managerInfo,
-            options: exportOptions
-          })
-        });
-        
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `leave-report-${tabName}-${format(new Date(), 'yyyy-MM-dd')}.pdf`;
-          a.click();
-          window.URL.revokeObjectURL(url);
-          toast.success("PDF exported successfully!");
-        }
-      } else {
-        // For CSV/Excel
-        const headers = [
-          'Employee ID', 'Employee Name', 'Department', 'Leave Type', 
-          'From Date', 'To Date', 'Total Days', 'Status', 'Priority',
-          'Reason', 'Applied By', 'Applied Date', 'Type', 'Site'
-        ];
-        
-        const rows = leavesToExport.map(leave => [
-          leave.employeeId,
-          leave.employeeName,
-          leave.department,
-          leave.leaveType,
-          leave.fromDate,
-          leave.toDate,
-          leave.totalDays.toString(),
-          leave.status,
-          leave.priority || 'medium',
-          leave.reason,
-          leave.appliedBy,
-          leave.createdAt,
-          leave.isManagerLeave ? 'Manager Leave' : 'Team Leave',
-          leave.site || 'N/A'
-        ]);
-
-        const csvContent = [headers, ...rows]
-          .map(row => row.map(cell => `"${cell}"`).join(','))
-          .join('\n');
-
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `leave-requests-${tabName}-${format(new Date(), 'yyyy-MM-dd')}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-        toast.success("Data exported successfully!");
-      }
-    } catch (error) {
-      console.error("Export error:", error);
-      toast.error("Failed to export data");
-    }
-  };
-
-  const getStatusBadgeVariant = (status: string) => {
-    switch (status) {
-      case 'approved': return 'default';
-      case 'rejected': return 'destructive';
-      case 'pending': return 'secondary';
-      case 'cancelled': return 'outline';
-      default: return 'outline';
-    }
-  };
-
-  const getPriorityBadgeVariant = (priority: string) => {
-    switch (priority) {
-      case 'urgent': return 'destructive';
-      case 'high': return 'destructive';
-      case 'medium': return 'secondary';
-      case 'low': return 'outline';
-      default: return 'outline';
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
-    } catch (error) {
-      return dateString;
-    }
-  };
-
-  const formatDateTime = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch (error) {
-      return dateString;
-    }
-  };
-
-  const getLeaveEvents = () => {
-    const allLeaves = [...leaveRequests, ...myLeaves];
-    return allLeaves.map(leave => ({
-      id: leave._id || leave.id,
-      title: `${leave.employeeName} - ${leave.leaveType}`,
-      start: new Date(leave.fromDate),
-      end: new Date(leave.toDate),
-      status: leave.status,
-      isManagerLeave: leave.isManagerLeave,
-      priority: leave.priority
-    }));
-  };
-
-  const filteredLeaves = leaveRequests.filter(leave => {
-    if (filter !== 'all' && leave.status !== filter) return false;
-    if (priorityFilter !== 'all' && leave.priority !== priorityFilter) return false;
-    if (dateRange.from && dateRange.to) {
-      const leaveStart = new Date(leave.fromDate);
-      const leaveEnd = new Date(leave.toDate);
-      if (!isWithinInterval(leaveStart, { start: dateRange.from, end: dateRange.to }) &&
-          !isWithinInterval(leaveEnd, { start: dateRange.from, end: dateRange.to })) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  const filteredMyLeaves = myLeaves.filter(leave => {
-    if (myLeavesFilter === 'all') return true;
-    return leave.status === myLeavesFilter;
-  });
-
-  const getLeaveKey = (leave: LeaveRequest) => {
-    return leave._id || leave.id || `${leave.employeeId}-${leave.fromDate}-${leave.toDate}`;
-  };
-
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
-
-  const toggleLeaveSelection = (leaveId: string) => {
-    setSelectedLeaves(prev => 
-      prev.includes(leaveId) 
-        ? prev.filter(id => id !== leaveId)
-        : [...prev, leaveId]
-    );
-  };
-
-  const selectAllLeaves = () => {
-    if (selectedLeaves.length === filteredLeaves.length) {
-      setSelectedLeaves([]);
-    } else {
-      setSelectedLeaves(filteredLeaves.map(leave => leave._id || leave.id || ''));
-    }
-  };
-
-  const getCalendarEventsForMonth = () => {
-    const events = getLeaveEvents();
-    const monthStart = startOfMonth(calendarDate);
-    const monthEnd = endOfMonth(calendarDate);
-    const days = eachDayOfInterval({ start: monthStart, end: monthEnd });
-    
-    return days.map(day => ({
-      date: day,
-      events: events.filter(event => 
-        isWithinInterval(day, { start: event.start, end: event.end })
-      )
-    }));
   };
 
   return (
     <>
-      {/* Mobile Sidebar - Only visible on mobile */}
-      <div className="lg:hidden">
-        <DashboardSidebar 
-          mobileOpen={mobileOpen}
-          onMobileClose={() => setMobileOpen(false)}
-        />
-      </div>
-      
-      {/* Main Content - Same for all devices */}
-      <div className="min-h-screen bg-background">
-        <DashboardHeader 
-          title="Leave Management - Manager" 
-          subtitle={`Welcome, ${managerInfo.name}! Manage team leaves and apply for your own leaves`}
-          onMenuClick={() => setMobileOpen(true)}
-        />
-        
-        <motion.div 
+      <div className="min-h-screen bg-background p-4 sm:p-6">
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="p-4 sm:p-6 space-y-4 sm:space-y-6"
+          className="mb-6"
         >
-          {/* Online Status Bar - Mobile Responsive */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 bg-muted/50 rounded-lg gap-3">
-            <div className="flex items-center space-x-3">
-              <Badge variant={isOnline ? "default" : "destructive"} className="flex items-center">
-                {isOnline ? (
-                  <Wifi className="h-3 w-3 mr-1" />
-                ) : (
-                  <WifiOff className="h-3 w-3 mr-1" />
-                )}
-                <span className="hidden xs:inline">{isOnline ? "Online" : "Offline"}</span>
-              </Badge>
-              {pendingActions.length > 0 && (
-                <Badge variant="outline" className="bg-yellow-100 text-yellow-800 flex items-center">
-                  <CloudOff className="h-3 w-3 mr-1" />
-                  {pendingActions.length} pending
-                </Badge>
-              )}
+          <div className="flex items-center gap-4 mb-4">
+            <Button variant="outline" size="sm" onClick={onBack}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Sites
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                {siteData.name} - Leave Details
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {formatDateDisplay(selectedDate)} • {siteData.totalEmployees} employees • {leaves.length} leave requests
+                {siteData.clientName && ` • Client: ${siteData.clientName}`}
+              </p>
             </div>
-            
-            {/* Mobile Menu Button - Only visible on mobile */}
-            <div className="flex items-center justify-between sm:hidden">
-              <div className="flex items-center space-x-2 bg-primary/10 px-3 py-1 rounded-lg">
-                <User className="h-4 w-4 text-primary" />
-                <span className="text-sm font-medium truncate max-w-[120px]">{managerInfo.name}</span>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowMobileMenu(!showMobileMenu)}
-                className="ml-2"
-              >
-                <Menu className="h-5 w-5" />
-              </Button>
-            </div>
-
-            {/* Desktop Manager Info */}
-            <div className="hidden sm:flex items-center space-x-4">
-              <div className="flex items-center space-x-2 bg-primary/10 px-3 py-1 rounded-lg">
-                <User className="h-4 w-4 text-primary" />
-                <span className="text-sm font-medium">{managerInfo.name}</span>
-                <Badge variant="outline" className="text-xs">
-                  {managerInfo.department || "No Department"}
-                </Badge>
-                <Badge variant="outline" className="text-xs bg-purple-100 text-purple-800 border-purple-300">
-                  Manager
-                </Badge>
-              </div>
-            </div>
-
-            {/* Mobile Menu Dropdown */}
-            <AnimatePresence>
-              {showMobileMenu && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="sm:hidden overflow-hidden"
-                >
-                  <div className="pt-3 space-y-2 border-t mt-2">
-                    <div className="flex flex-col space-y-2">
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">Department: </span>
-                        <span className="font-medium">{managerInfo.department || "Not set"}</span>
-                      </div>
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">Site: </span>
-                        <span className="font-medium">{selectedSite?.name || managerInfo.site || "Main Site"}</span>
-                      </div>
-                      <Badge variant="outline" className="text-xs bg-purple-100 text-purple-800 border-purple-300 w-fit">
-                        Manager
-                      </Badge>
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
+        </motion.div>
 
-          {/* Statistics Cards - Mobile Responsive Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-4">
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-blue-600">{stats.total}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Total</div>
-                  </div>
-                  <Users2 className="h-5 w-5 sm:h-8 sm:w-8 text-blue-400" />
+        {/* Summary Cards */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6"
+        >
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-blue-800">Total Employees</p>
+                  <p className="text-2xl font-bold text-blue-600">{siteData.totalEmployees}</p>
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-yellow-600">{stats.pending}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Pending</div>
-                  </div>
-                  <Clock4 className="h-5 w-5 sm:h-8 sm:w-8 text-yellow-400" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-green-600">{stats.approved}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Approved</div>
-                  </div>
-                  <UserCheck className="h-5 w-5 sm:h-8 sm:w-8 text-green-400" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-red-600">{stats.rejected}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Rejected</div>
-                  </div>
-                  <UserX className="h-5 w-5 sm:h-8 sm:w-8 text-red-400" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-purple-600">{myLeaves.length}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">My Leaves</div>
-                  </div>
-                  <User className="h-5 w-5 sm:h-8 sm:w-8 text-purple-400" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-orange-600">{stats.urgent}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Urgent</div>
-                  </div>
-                  <AlertTriangle className="h-5 w-5 sm:h-8 sm:w-8 text-orange-400" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="hover:shadow-md transition-shadow col-span-2 sm:col-span-1">
-              <CardContent className="p-3 sm:p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-lg sm:text-2xl font-bold text-pink-600">{stats.escalated}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">Escalated</div>
-                  </div>
-                  <ShieldAlert className="h-5 w-5 sm:h-8 sm:w-8 text-pink-400" />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Leave Balance Card - Mobile Responsive */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base sm:text-lg flex items-center">
-                <Award className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />
-                Your Leave Balance
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2 sm:gap-3">
-                {Object.entries(leaveBalance).map(([type, days]) => (
-                  <div key={type} className="text-center p-2 sm:p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
-                    <div className="text-base sm:text-2xl font-bold text-primary">{days}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground capitalize truncate">{type}</div>
-                  </div>
-                ))}
+                <Users className="h-8 w-8 text-blue-600" />
               </div>
             </CardContent>
           </Card>
 
-          {/* Main Controls - Mobile Responsive */}
-          <div className="space-y-3 sm:space-y-4">
-            {/* First Row: Department and Site Selectors */}
-            <div className="flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full">
-                <div className="space-y-1 w-full sm:w-auto">
-                  <Label className="text-xs sm:text-sm">Department</Label>
-                  <Select
-                    value={managerDepartment}
-                    onValueChange={setManagerDepartment}
-                    disabled={availableDepartments.length === 0}
+          <Card className="bg-yellow-50 border-yellow-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-yellow-800">Pending</p>
+                  <p className="text-2xl font-bold text-yellow-600">{siteData.pendingLeaves}</p>
+                </div>
+                <Clock className="h-8 w-8 text-yellow-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-green-50 border-green-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-800">Approved</p>
+                  <p className="text-2xl font-bold text-green-600">{siteData.approvedLeaves}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-green-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-red-50 border-red-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-red-800">Rejected</p>
+                  <p className="text-2xl font-bold text-red-600">{siteData.rejectedLeaves}</p>
+                </div>
+                <XCircle className="h-8 w-8 text-red-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-amber-50 border-amber-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-amber-800">Supervisor</p>
+                  <p className="text-2xl font-bold text-amber-600">{siteData.supervisorLeaves}</p>
+                </div>
+                <Shield className="h-8 w-8 text-amber-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-purple-50 border-purple-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-purple-800">Manager</p>
+                  <p className="text-2xl font-bold text-purple-600">{siteData.managerLeaves}</p>
+                </div>
+                <Crown className="h-8 w-8 text-purple-600" />
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Role Summary */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="mb-6"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-full">
+                    <Crown className="h-5 w-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-purple-800">Manager Leaves</p>
+                    <p className="text-xl font-bold text-purple-600">{managerLeaves.length}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 rounded-full">
+                    <Shield className="h-5 w-5 text-amber-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-amber-800">Supervisor Leaves</p>
+                    <p className="text-xl font-bold text-amber-600">{supervisorLeaves.length}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-100 rounded-full">
+                    <User className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-blue-800">Employee Leaves</p>
+                    <p className="text-xl font-bold text-blue-600">{employeeLeaves.length}</p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Filters and Tabs */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="mb-6"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                <div className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg">
+                  <Button
+                    variant={activeTab === 'all' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('all'); setCurrentPage(1); }}
                   >
-                    <SelectTrigger className="w-full sm:w-64">
-                      <SelectValue placeholder="Select Department" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableDepartments.length > 0 ? (
-                        availableDepartments.map((dept) => (
-                          <SelectItem key={dept} value={dept}>
-                            <div className="flex items-center">
-                              <Building className="mr-2 h-4 w-4 flex-shrink-0" />
-                              <span className="truncate">{dept}</span>
-                            </div>
-                          </SelectItem>
+                    All ({allLeaves.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'pending' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('pending'); setCurrentPage(1); }}
+                  >
+                    Pending ({pendingLeaves.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'approved' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('approved'); setCurrentPage(1); }}
+                  >
+                    Approved ({approvedLeaves.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'rejected' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => { setActiveTab('rejected'); setCurrentPage(1); }}
+                  >
+                    Rejected ({rejectedLeaves.length})
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2 w-full lg:w-auto">
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by employee, ID, type..."
+                    value={employeeSearch}
+                    onChange={(e) => { setEmployeeSearch(e.target.value); setCurrentPage(1); }}
+                    className="w-full lg:w-64"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Leave Requests Table */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Leave Requests - {filteredLeaves.length} found
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="h-12 px-4 text-left font-medium">Employee</th>
+                        <th className="h-12 px-4 text-left font-medium">Role</th>
+                        <th className="h-12 px-4 text-left font-medium">Leave Type</th>
+                        <th className="h-12 px-4 text-left font-medium">Dates</th>
+                        <th className="h-12 px-4 text-left font-medium">Days</th>
+                        <th className="h-12 px-4 text-left font-medium">Status</th>
+                        <th className="h-12 px-4 text-left font-medium">Applied</th>
+                        <th className="h-12 px-4 text-left font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedLeaves.length > 0 ? (
+                        paginatedLeaves.map((leave) => (
+                          <tr key={leave._id} className="border-b hover:bg-muted/50">
+                            <td className="p-4 align-middle">
+                              <div className="font-medium">{leave.employeeName}</div>
+                              <div className="text-xs text-muted-foreground">{leave.employeeId}</div>
+                            </td>
+                            <td className="p-4 align-middle">
+                              {getRoleBadge(leave)}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Badge className={getLeaveTypeBadge(leave.leaveType)}>
+                                {leave.leaveType}
+                              </Badge>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="text-xs">
+                                <div>{formatDateDisplay(leave.fromDate)}</div>
+                                <div>to {formatDateDisplay(leave.toDate)}</div>
+                              </div>
+                            </td>
+                            <td className="p-4 align-middle font-bold">{leave.totalDays}</td>
+                            <td className="p-4 align-middle">
+                              <Badge className={getStatusBadge(leave.status)}>
+                                {leave.status}
+                              </Badge>
+                            </td>
+                            <td className="p-4 align-middle text-xs">{formatDateDisplay(leave.createdAt)}</td>
+                            <td className="p-4 align-middle">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => handleViewLeave(leave)}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </td>
+                          </tr>
                         ))
                       ) : (
-                        <SelectItem value="loading" disabled>
-                          Loading departments...
-                        </SelectItem>
+                        <tr>
+                          <td colSpan={8} className="p-8 text-center text-muted-foreground">
+                            No leave requests found for the selected filters.
+                          </td>
+                        </tr>
                       )}
-                    </SelectContent>
-                  </Select>
+                    </tbody>
+                  </table>
                 </div>
-                
-                <div className="space-y-1 w-full sm:w-auto">
-                  <Label className="text-xs sm:text-sm">Site</Label>
-                  <Select 
-                    value={selectedSite?._id || "all"} 
-                    onValueChange={(value) => {
-                      if (value === "all") {
-                        setSelectedSite(null);
-                      } else {
-                        const site = availableSites.find(s => s._id === value);
-                        setSelectedSite(site || null);
-                      }
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-48">
-                      <SelectValue placeholder="Select Site">
-                        {selectedSite ? selectedSite.name : "All Sites"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Sites</SelectItem>
-                      {availableSites.map((site) => (
-                        <SelectItem key={site._id} value={site._id}>
-                          <div className="flex items-center">
-                            <MapPin className="mr-2 h-4 w-4 flex-shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium truncate">{site.name}</div>
-                              <div className="text-xs text-muted-foreground truncate">
-                                {site.clientName} • {site.location}
-                              </div>
-                            </div>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedSite && (
-                    <div className="text-xs text-muted-foreground mt-1 hidden sm:block">
-                      Managers: {selectedSite.managerCount || 0} • Supervisors: {selectedSite.supervisorCount || 0}
+
+                {/* Pagination */}
+                {filteredLeaves.length > 0 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                    <div className="text-sm text-muted-foreground">
+                      Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredLeaves.length)} of {filteredLeaves.length} entries
                     </div>
-                  )}
-                </div>
-                
-                <div className="flex items-center space-x-2 mt-2 sm:mt-0">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => {
-                      fetchLeaveRequests();
-                      fetchEmployees();
-                      fetchMyLeaves();
-                    }}
-                    className="h-8 sm:h-9 flex-1 sm:flex-none"
-                    disabled={isLoading || isLoadingEmployees}
-                  >
-                    <RefreshCw className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="sm:inline">Refresh</span>
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={fetchSitesFromTaskService}
-                    className="h-8 sm:h-9 flex-1 sm:flex-none"
-                    disabled={isLoading}
-                  >
-                    <RefreshCw className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="sm:inline">Sites</span>
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            {/* Second Row: Apply for Leave and Export Buttons */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 sm:pt-4 border-t">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button className="bg-purple-600 hover:bg-purple-700 w-full sm:w-auto">
-                      <Plus className="mr-2 h-4 w-4" />
-                      <span>Apply for My Leave</span>
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto p-4 sm:p-6">
-                    <DialogHeader>
-                      <DialogTitle className="text-lg">Apply for Your Leave</DialogTitle>
-                      <div className="text-xs sm:text-sm text-muted-foreground">
-                        Manager: <span className="font-medium">{managerInfo.name}</span>
-                      </div>
-                    </DialogHeader>
-                    <form onSubmit={handleSubmitManagerLeave} className="space-y-3 sm:space-y-4">
-                      {/* Manager Info Display */}
-                      <div className="bg-muted/30 p-2 sm:p-3 rounded-lg space-y-2">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                          <div>
-                            <span className="text-xs text-muted-foreground">Manager Name:</span>
-                            <div className="text-sm font-medium truncate">{managerInfo.name}</div>
-                          </div>
-                          <div>
-                            <span className="text-xs text-muted-foreground">Department:</span>
-                            <div className="text-sm font-medium truncate">{managerInfo.department || managerDepartment}</div>
-                          </div>
-                          <div>
-                            <span className="text-xs text-muted-foreground">Contact:</span>
-                            <div className="text-sm font-medium truncate">{managerInfo.contactNumber || "Not set"}</div>
-                          </div>
-                          <div>
-                            <span className="text-xs text-muted-foreground">Site:</span>
-                            <div className="text-sm font-medium truncate">{managerInfo.site || "Main Site"}</div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* Leave Balance Display */}
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 sm:p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center">
-                            <Award className="h-4 w-4 text-blue-600 mr-2" />
-                            <span className="text-xs sm:text-sm font-medium text-blue-800">Available Leave Balance</span>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
-                          {Object.entries(leaveBalance).map(([type, days]) => (
-                            <div key={type} className="text-center p-2 bg-white rounded">
-                              <div className="font-semibold text-blue-700">{days}</div>
-                              <div className="text-blue-600 capitalize truncate">{type}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label htmlFor="leaveType" className="text-sm">Leave Type *</Label>
-                        <Select
-                          value={formData.leaveType}
-                          onValueChange={(value) => handleInputChange('leaveType', value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select leave type" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="casual">Casual Leave ({leaveBalance.casual} days left)</SelectItem>
-                            <SelectItem value="sick">Sick Leave ({leaveBalance.sick} days left)</SelectItem>
-                            <SelectItem value="annual">Annual Leave ({leaveBalance.annual} days left)</SelectItem>
-                            <SelectItem value="maternity">Maternity Leave ({leaveBalance.maternity} days left)</SelectItem>
-                            <SelectItem value="paternity">Paternity Leave ({leaveBalance.paternity} days left)</SelectItem>
-                            <SelectItem value="bereavement">Bereavement Leave ({leaveBalance.bereavement} days left)</SelectItem>
-                            <SelectItem value="other">Other ({leaveBalance.other} days left)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="fromDate" className="text-sm">Start Date *</Label>
-                          <Input
-                            id="fromDate"
-                            type="date"
-                            value={formData.fromDate}
-                            onChange={(e) => handleInputChange('fromDate', e.target.value)}
-                            required
-                            className="w-full"
-                          />
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <Label htmlFor="toDate" className="text-sm">End Date *</Label>
-                          <Input
-                            id="toDate"
-                            type="date"
-                            value={formData.toDate}
-                            onChange={(e) => handleInputChange('toDate', e.target.value)}
-                            required
-                            className="w-full"
-                          />
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label htmlFor="priority" className="text-sm">Priority</Label>
-                        <Select
-                          value={formData.priority}
-                          onValueChange={(value) => handleInputChange('priority', value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select priority" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="low">Low</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="high">High</SelectItem>
-                            <SelectItem value="urgent">Urgent</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label htmlFor="handoverTo" className="text-sm">Handover To (Optional)</Label>
-                        <Input
-                          id="handoverTo"
-                          value={formData.handoverTo}
-                          onChange={(e) => handleInputChange('handoverTo', e.target.value)}
-                          placeholder="Name of person handling your responsibilities"
-                          className="w-full"
-                        />
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label htmlFor="reason" className="text-sm">Reason for Leave *</Label>
-                        <Textarea
-                          id="reason"
-                          value={formData.reason}
-                          onChange={(e) => handleInputChange('reason', e.target.value)}
-                          placeholder="Enter detailed reason for leave"
-                          rows={4}
-                          required
-                          className="w-full"
-                        />
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label htmlFor="handoverRemarks" className="text-sm">Handover Remarks (Optional)</Label>
-                        <Textarea
-                          id="handoverRemarks"
-                          value={formData.handoverRemarks}
-                          onChange={(e) => handleInputChange('handoverRemarks', e.target.value)}
-                          placeholder="Any special instructions or remarks"
-                          rows={3}
-                          className="w-full"
-                        />
-                      </div>
-                      
-                      <div className="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2 pt-4">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => setDialogOpen(false)}
-                          className="w-full sm:w-auto"
-                        >
-                          Cancel
-                        </Button>
-                        <Button type="submit" disabled={isSubmitting} className="bg-purple-600 hover:bg-purple-700 w-full sm:w-auto">
-                          {isSubmitting && (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          )}
-                          Submit Leave
-                        </Button>
-                      </div>
-                    </form>
-                  </DialogContent>
-                </Dialog>
-
-                {/* Export Button with Options */}
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full sm:w-auto">
-                      <Download className="mr-2 h-4 w-4" />
-                      <span>Export</span>
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-[400px] p-4 sm:p-6">
-                    <DialogHeader>
-                      <DialogTitle className="text-lg">Export Options</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <Label className="text-sm">Export Format</Label>
-                        <Select
-                          value={exportOptions.format}
-                          onValueChange={(value: 'csv' | 'excel' | 'pdf') => 
-                            setExportOptions(prev => ({ ...prev, format: value }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="csv">CSV</SelectItem>
-                            <SelectItem value="excel">Excel</SelectItem>
-                            <SelectItem value="pdf">PDF Report</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id="includeManagerLeaves"
-                            checked={exportOptions.includeManagerLeaves}
-                            onCheckedChange={(checked) => 
-                              setExportOptions(prev => ({ ...prev, includeManagerLeaves: !!checked }))
-                            }
-                          />
-                          <Label htmlFor="includeManagerLeaves" className="text-sm">Include Manager Leaves</Label>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id="includeComments"
-                            checked={exportOptions.includeComments}
-                            onCheckedChange={(checked) => 
-                              setExportOptions(prev => ({ ...prev, includeComments: !!checked }))
-                            }
-                          />
-                          <Label htmlFor="includeComments" className="text-sm">Include Comments</Label>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          <Checkbox 
-                            id="includeAttachments"
-                            checked={exportOptions.includeAttachments}
-                            onCheckedChange={(checked) => 
-                              setExportOptions(prev => ({ ...prev, includeAttachments: !!checked }))
-                            }
-                          />
-                          <Label htmlFor="includeAttachments" className="text-sm">Include Attachment Info</Label>
-                        </div>
-                      </div>
-                      
-                      <Button onClick={handleExport} className="w-full">
-                        <DownloadCloud className="mr-2 h-4 w-4" />
-                        Export Data
+                    <div className="flex items-center space-x-2">
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
+                        First
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
+                        Previous
+                      </Button>
+                      <span className="text-sm">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalPages}>
+                        Next
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages}>
+                        Last
                       </Button>
                     </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
-          </div>
-
-          {/* Advanced Filters */}
-          <AnimatePresence>
-            {showAdvancedFilters && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
-              >
-                <Card>
-                  <CardContent className="p-3 sm:p-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-                      <div className="space-y-2">
-                        <Label className="text-sm">Date Range</Label>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button variant="outline" className="w-full justify-start text-sm">
-                                <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
-                                <span className="truncate">{dateRange.from ? format(dateRange.from, 'PP') : 'From'}</span>
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0">
-                              <Calendar
-                                mode="single"
-                                selected={dateRange.from}
-                                onSelect={(date) => setDateRange(prev => ({ ...prev, from: date }))}
-                              />
-                            </PopoverContent>
-                          </Popover>
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button variant="outline" className="w-full justify-start text-sm">
-                                <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
-                                <span className="truncate">{dateRange.to ? format(dateRange.to, 'PP') : 'To'}</span>
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0">
-                              <Calendar
-                                mode="single"
-                                selected={dateRange.to}
-                                onSelect={(date) => setDateRange(prev => ({ ...prev, to: date }))}
-                              />
-                            </PopoverContent>
-                          </Popover>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label className="text-sm">Priority</Label>
-                        <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="All Priorities" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Priorities</SelectItem>
-                            <SelectItem value="urgent">Urgent</SelectItem>
-                            <SelectItem value="high">High</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="low">Low</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label className="text-sm">Leave Type</Label>
-                        <Select>
-                          <SelectTrigger>
-                            <SelectValue placeholder="All Types" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Types</SelectItem>
-                            <SelectItem value="casual">Casual Leave</SelectItem>
-                            <SelectItem value="sick">Sick Leave</SelectItem>
-                            <SelectItem value="annual">Annual Leave</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="flex items-end space-x-2">
-                        <Button 
-                          variant="outline" 
-                          onClick={() => {
-                            setDateRange({});
-                            setPriorityFilter('all');
-                          }}
-                          className="w-full text-sm"
-                        >
-                          Clear Filters
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Toggle Advanced Filters */}
-          <div className="flex justify-center">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-              className="text-muted-foreground text-sm"
-            >
-              {showAdvancedFilters ? (
-                <ChevronUp className="h-4 w-4 mr-1" />
-              ) : (
-                <ChevronDown className="h-4 w-4 mr-1" />
-              )}
-              {showAdvancedFilters ? 'Hide' : 'Show'} Advanced Filters
-            </Button>
-          </div>
-
-          {/* Tabs for Team Leaves and My Leaves */}
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="team-leaves" className="text-xs sm:text-sm">
-                <Users className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-                <span>Team Leaves</span>
-              </TabsTrigger>
-              <TabsTrigger value="my-leaves" className="text-xs sm:text-sm">
-                <User className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-                <span>My Leaves</span>
-              </TabsTrigger>
-            </TabsList>
-
-            {/* Team Leaves Tab */}
-            <TabsContent value="team-leaves" className="space-y-4">
-              <Card>
-                <CardHeader className="p-4 sm:p-6">
-                  <div className="flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:justify-between sm:items-center gap-4">
-                    <div>
-                      <CardTitle className="text-base sm:text-lg">
-                        Team Leave Requests
-                      </CardTitle>
-                      <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                        {filteredLeaves.length} requests • {employees.length} employees
-                        {selectedSite && ` • ${selectedSite.name}`}
-                      </p>
-                    </div>
-                    <div className="flex flex-col space-y-2 sm:space-y-0 sm:flex-row sm:items-center gap-2">
-                      {selectedLeaves.length > 0 && (
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="bg-blue-50 text-xs">
-                            {selectedLeaves.length} selected
-                          </Badge>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setBulkDialogOpen(true)}
-                            disabled={!isOnline}
-                            className="text-xs h-8"
-                          >
-                            <CheckSquare className="h-3 w-3 mr-1" />
-                            Bulk
-                          </Button>
-                        </div>
-                      )}
-                      
-                      <div className="flex flex-wrap gap-1 sm:gap-2">
-                        <Button
-                          variant={filter === 'all' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setFilter('all')}
-                          className="text-xs h-8 px-2 sm:px-3"
-                        >
-                          All
-                        </Button>
-                        <Button
-                          variant={filter === 'pending' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setFilter('pending')}
-                          className="text-xs h-8 px-2 sm:px-3"
-                        >
-                          Pending
-                        </Button>
-                        <Button
-                          variant={filter === 'approved' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setFilter('approved')}
-                          className="text-xs h-8 px-2 sm:px-3"
-                        >
-                          Approved
-                        </Button>
-                        <Button
-                          variant={filter === 'rejected' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setFilter('rejected')}
-                          className="text-xs h-8 px-2 sm:px-3"
-                        >
-                          Rejected
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-4 sm:p-6">
-                  {!managerDepartment ? (
-                    <div className="text-center py-6 sm:py-8">
-                      <Building className="h-8 w-8 sm:h-12 sm:w-12 mx-auto text-muted-foreground mb-4" />
-                      <h3 className="font-medium text-base sm:text-lg mb-2">Select a Department</h3>
-                      <p className="text-xs sm:text-sm text-muted-foreground">
-                        Please select a department to view team leave requests
-                      </p>
-                    </div>
-                  ) : isLoading ? (
-                    <div className="flex items-center justify-center py-6 sm:py-8">
-                      <Loader2 className="h-6 w-6 sm:h-8 sm:w-8 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : filteredLeaves.length === 0 ? (
-                    <div className="text-center py-6 sm:py-8">
-                      <div className="flex flex-col items-center">
-                        <Users className="h-8 w-8 sm:h-12 sm:w-12 text-muted-foreground mb-4" />
-                        <h3 className="font-medium text-base sm:text-lg mb-2">No Team Leave Requests</h3>
-                        <p className="text-xs sm:text-sm text-muted-foreground mb-4">
-                          No team leave requests found for {managerDepartment} department
-                          {selectedSite && ` at ${selectedSite.name}`}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {/* Select All Checkbox */}
-                      <div className="flex items-center space-x-2 p-2 border rounded-lg">
-                        <Checkbox
-                          id="select-all"
-                          checked={selectedLeaves.length === filteredLeaves.length && filteredLeaves.length > 0}
-                          onCheckedChange={selectAllLeaves}
-                        />
-                        <Label htmlFor="select-all" className="text-xs sm:text-sm font-medium cursor-pointer">
-                          Select all {filteredLeaves.length} requests
-                        </Label>
-                      </div>
-
-                      {/* Leave Requests List */}
-                      {filteredLeaves.map((leave) => {
-                        const leaveKey = getLeaveKey(leave);
-                        const isSelected = selectedLeaves.includes(leave._id || leave.id || '');
-                        
-                        return (
-                          <motion.div
-                            key={leaveKey}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className={`p-3 sm:p-4 border rounded-lg space-y-3 hover:border-primary/50 transition-colors ${isSelected ? 'bg-blue-50 border-blue-300' : ''}`}
-                          >
-                            <div className="flex items-start gap-2 sm:gap-3">
-                              <Checkbox
-                                checked={isSelected}
-                                onCheckedChange={() => toggleLeaveSelection(leave._id || leave.id || '')}
-                                className="mt-1"
-                              />
-                              
-                              <div className="flex-1 min-w-0">
-                                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                                  <div className="space-y-1 flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <h3 className="font-medium text-sm sm:text-base truncate max-w-[150px] sm:max-w-none">
-                                        {leave.employeeName}
-                                      </h3>
-                                      <Badge variant={getStatusBadgeVariant(leave.status)} className="text-xs">
-                                        {leave.status}
-                                      </Badge>
-                                      {leave.priority && leave.priority !== 'medium' && (
-                                        <Badge variant={getPriorityBadgeVariant(leave.priority)} className="text-xs">
-                                          {leave.priority}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    <p className="text-xs sm:text-sm text-muted-foreground">
-                                      <CalendarIcon className="inline mr-1 h-3 w-3" />
-                                      {formatDate(leave.fromDate)} to {formatDate(leave.toDate)} ({leave.totalDays}d)
-                                    </p>
-                                    <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 text-xs">
-                                      <span className="text-muted-foreground flex items-center">
-                                        <FileText className="mr-1 h-3 w-3" />
-                                        <span className="capitalize truncate">{leave.leaveType}</span>
-                                      </span>
-                                      <span className="text-muted-foreground flex items-center">
-                                        <Building className="mr-1 h-3 w-3" />
-                                        <span className="truncate">{leave.department}</span>
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2 mt-2 sm:mt-0">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => handleViewLeave(leave)}
-                                      className="h-8 px-2"
-                                    >
-                                      <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
-                                    </Button>
-                                    {leave.status === 'pending' && (
-                                      <>
-                                        <Button
-                                          variant="default"
-                                          size="sm"
-                                          onClick={() => handleApproveLeave(leave._id || leave.id || '')}
-                                          className="bg-green-600 hover:bg-green-700 h-8 px-2"
-                                          disabled={!isOnline}
-                                        >
-                                          <Check className="h-3 w-3 sm:h-4 sm:w-4" />
-                                        </Button>
-                                        <Button
-                                          variant="destructive"
-                                          size="sm"
-                                          onClick={() => handleRejectLeave(leave._id || leave.id || '')}
-                                          className="h-8 px-2"
-                                          disabled={!isOnline}
-                                        >
-                                          <X className="h-3 w-3 sm:h-4 sm:w-4" />
-                                        </Button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="pt-2 border-t mt-2">
-                                  <p className="text-xs sm:text-sm">
-                                    <span className="font-medium">Reason:</span> {leave.reason}
-                                  </p>
-                                  <div className="flex flex-col sm:flex-row justify-between mt-2 text-xs text-muted-foreground gap-1">
-                                    <span>Contact: {leave.contactNumber}</span>
-                                    <span>Applied: {formatDate(leave.createdAt)}</span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </motion.div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* My Leaves Tab */}
-            <TabsContent value="my-leaves" className="space-y-4">
-              <Card>
-                <CardHeader className="p-4 sm:p-6">
-                  <div className="flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:justify-between sm:items-center gap-4">
-                    <div>
-                      <CardTitle className="text-base sm:text-lg">
-                        My Leave Requests
-                      </CardTitle>
-                      <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                        {filteredMyLeaves.length} of your personal leave requests
-                      </p>
-                    </div>
-                    <div className="flex flex-col space-y-2 sm:space-y-0 sm:flex-row sm:items-center gap-2">
-                      <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300 text-xs w-fit">
-                        {filteredMyLeaves.length} personal
-                      </Badge>
-                      <div className="flex flex-wrap gap-1 sm:gap-2">
-                        <Button
-                          variant={myLeavesFilter === 'all' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setMyLeavesFilter('all')}
-                          className={`text-xs h-8 px-2 sm:px-3 ${myLeavesFilter === 'all' ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
-                        >
-                          All
-                        </Button>
-                        <Button
-                          variant={myLeavesFilter === 'pending' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setMyLeavesFilter('pending')}
-                          className={`text-xs h-8 px-2 sm:px-3 ${myLeavesFilter === 'pending' ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
-                        >
-                          Pending
-                        </Button>
-                        <Button
-                          variant={myLeavesFilter === 'approved' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setMyLeavesFilter('approved')}
-                          className={`text-xs h-8 px-2 sm:px-3 ${myLeavesFilter === 'approved' ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
-                        >
-                          Approved
-                        </Button>
-                        <Button
-                          variant={myLeavesFilter === 'rejected' ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => setMyLeavesFilter('rejected')}
-                          className={`text-xs h-8 px-2 sm:px-3 ${myLeavesFilter === 'rejected' ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
-                        >
-                          Rejected
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-4 sm:p-6">
-                  {filteredMyLeaves.length === 0 ? (
-                    <div className="text-center py-6 sm:py-8">
-                      <div className="flex flex-col items-center">
-                        <FileText className="h-8 w-8 sm:h-12 sm:w-12 text-muted-foreground mb-4" />
-                        <h3 className="font-medium text-base sm:text-lg mb-2">No Personal Leave Requests</h3>
-                        <p className="text-xs sm:text-sm text-muted-foreground mb-4">
-                          You haven't applied for any personal leaves yet
-                        </p>
-                        <Button onClick={() => setDialogOpen(true)} className="bg-purple-600 hover:bg-purple-700 text-sm h-9">
-                          <Plus className="mr-2 h-4 w-4" />
-                          Apply for My Leave
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {filteredMyLeaves.map((leave) => {
-                        const leaveKey = getLeaveKey(leave);
-                        return (
-                          <motion.div
-                            key={leaveKey}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="p-3 sm:p-4 border rounded-lg space-y-3 hover:border-purple-300 transition-colors bg-purple-50/50"
-                          >
-                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                              <div className="space-y-1 flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <h3 className="font-medium text-sm sm:text-base">Your Leave Request</h3>
-                                  <Badge variant={getStatusBadgeVariant(leave.status)} className="text-xs">
-                                    {leave.status}
-                                  </Badge>
-                                  <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300 text-xs">
-                                    Manager
-                                  </Badge>
-                                </div>
-                                <p className="text-xs sm:text-sm text-muted-foreground">
-                                  <CalendarIcon className="inline mr-1 h-3 w-3" />
-                                  {formatDate(leave.fromDate)} to {formatDate(leave.toDate)} ({leave.totalDays}d)
-                                </p>
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 text-xs">
-                                  <span className="text-muted-foreground flex items-center">
-                                    <FileText className="mr-1 h-3 w-3" />
-                                    <span className="capitalize">{leave.leaveType}</span>
-                                  </span>
-                                  <span className="text-muted-foreground flex items-center">
-                                    <Building className="mr-1 h-3 w-3" />
-                                    <span className="truncate">{leave.department}</span>
-                                  </span>
-                                  <span className="text-muted-foreground flex items-center">
-                                    <Clock className="mr-1 h-3 w-3" />
-                                    {formatDate(leave.createdAt)}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="flex gap-2 mt-2 sm:mt-0">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleViewLeave(leave)}
-                                  className="h-8 px-2"
-                                >
-                                  <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="pt-2 border-t">
-                              <p className="text-xs sm:text-sm">
-                                <span className="font-medium">Reason:</span> {leave.reason}
-                              </p>
-                              {leave.handoverTo && (
-                                <p className="text-xs sm:text-sm mt-1">
-                                  <span className="font-medium">Handover to:</span> {leave.handoverTo}
-                                </p>
-                              )}
-                              {leave.status === 'approved' && leave.approvedBy && (
-                                <div className="mt-2 text-xs text-green-600">
-                                  Approved by {leave.approvedBy} on {formatDate(leave.approvedAt || '')}
-                                </div>
-                              )}
-                              {leave.status === 'rejected' && leave.rejectedBy && (
-                                <div className="mt-2 text-xs text-red-600">
-                                  Rejected by {leave.rejectedBy} on {formatDate(leave.rejectedAt || '')}
-                                </div>
-                              )}
-                            </div>
-                          </motion.div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
-
-          {/* View Leave Dialog */}
-          <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
-              <DialogHeader>
-                <DialogTitle className="text-lg">Leave Request Details</DialogTitle>
-                {selectedLeave?.isManagerLeave && (
-                  <div className="text-xs sm:text-sm text-purple-600">
-                    ⓘ This is a manager's personal leave request
-                  </div>
-                )}
-              </DialogHeader>
-              {selectedLeave && (
-                <div className="space-y-4 sm:space-y-6">
-                  {/* Employee Information */}
-                  <div className={`p-3 sm:p-4 rounded-lg space-y-3 ${selectedLeave.isManagerLeave ? 'bg-purple-50 border border-purple-200' : 'bg-muted/50'}`}>
-                    <h3 className="font-medium text-base sm:text-lg flex items-center gap-2">
-                      <User className="h-4 w-4 sm:h-5 sm:w-5" />
-                      {selectedLeave.isManagerLeave ? 'Manager Information' : 'Employee Information'}
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <User className="h-3 w-3" />
-                          <span>{selectedLeave.isManagerLeave ? 'Manager' : 'Employee'}</span>
-                        </div>
-                        <div className="text-sm font-medium break-words">{selectedLeave.employeeName}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Hash className="h-3 w-3" />
-                          <span>ID</span>
-                        </div>
-                        <div className="text-sm font-medium break-words">{selectedLeave.employeeId}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Building className="h-3 w-3" />
-                          <span>Department</span>
-                        </div>
-                        <div className="text-sm font-medium break-words">{selectedLeave.department}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Contact</div>
-                        <div className="text-sm font-medium break-words">{selectedLeave.contactNumber}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Leave Details */}
-                  <div className="space-y-3 sm:space-y-4">
-                    <h3 className="font-medium text-base sm:text-lg flex items-center gap-2">
-                      <FileText className="h-4 w-4 sm:h-5 sm:w-5" />
-                      Leave Details
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Leave Type</div>
-                        <div className="text-sm font-medium capitalize break-words">{selectedLeave.leaveType}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Status</div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant={getStatusBadgeVariant(selectedLeave.status)} className="text-xs">
-                            {selectedLeave.status}
-                          </Badge>
-                          {selectedLeave.priority && selectedLeave.priority !== 'medium' && (
-                            <Badge variant={getPriorityBadgeVariant(selectedLeave.priority)} className="text-xs">
-                              {selectedLeave.priority}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <CalendarIcon className="h-3 w-3" />
-                          <span>From Date</span>
-                        </div>
-                        <div className="text-sm font-medium">{formatDate(selectedLeave.fromDate)}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <CalendarIcon className="h-3 w-3" />
-                          <span>To Date</span>
-                        </div>
-                        <div className="text-sm font-medium">{formatDate(selectedLeave.toDate)}</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Clock className="h-3 w-3" />
-                          <span>Total Days</span>
-                        </div>
-                        <div className="text-sm font-medium">{selectedLeave.totalDays} days</div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Applied By</div>
-                        <div className="text-sm font-medium break-words">{selectedLeave.appliedBy}</div>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">Reason</div>
-                      <div className="p-2 sm:p-3 bg-muted/30 rounded-lg text-sm break-words">
-                        {selectedLeave.reason}
-                      </div>
-                    </div>
-                    
-                    {selectedLeave.handoverTo && (
-                      <div className="space-y-1">
-                        <div className="text-xs text-muted-foreground">Handover Information</div>
-                        <div className="p-2 sm:p-3 bg-blue-50 rounded-lg">
-                          <div className="text-sm font-medium break-words">Handover to: {selectedLeave.handoverTo}</div>
-                          {selectedLeave.handoverRemarks && (
-                            <div className="text-xs sm:text-sm mt-1 break-words">{selectedLeave.handoverRemarks}</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="space-y-1">
-                      <div className="text-xs text-muted-foreground">Application Date</div>
-                      <div className="text-sm font-medium">{formatDateTime(selectedLeave.createdAt)}</div>
-                    </div>
-                  </div>
-
-                  {/* Comments Section */}
-                  <div className="space-y-3 sm:space-y-4">
-                    <h3 className="font-medium text-base sm:text-lg flex items-center gap-2">
-                      <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5" />
-                      Comments & Discussion
-                    </h3>
-                    
-                    <div className="space-y-3 max-h-40 sm:max-h-60 overflow-y-auto p-3 border rounded-lg">
-                      {selectedLeave.comments && selectedLeave.comments.length > 0 ? (
-                        selectedLeave.comments.map((comment) => (
-                          <div key={comment.id} className="p-2 sm:p-3 bg-muted/30 rounded-lg">
-                            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-1">
-                              <div className="font-medium text-sm">{comment.userName}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {formatDateTime(comment.timestamp)}
-                              </div>
-                            </div>
-                            <div className="mt-1 text-xs sm:text-sm break-words">{comment.comment}</div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              {comment.userRole} • {comment.isManager ? 'Manager' : 'Employee'}
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-center py-4 text-muted-foreground text-sm">
-                          No comments yet
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Textarea
-                        placeholder="Add a comment..."
-                        value={commentText}
-                        onChange={(e) => setCommentText(e.target.value)}
-                        rows={3}
-                        className="w-full text-sm"
-                      />
-                      <Button 
-                        onClick={handleAddComment} 
-                        disabled={!commentText.trim() || isAddingComment}
-                        className="w-full text-sm"
-                      >
-                        {isAddingComment ? (
-                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        ) : (
-                          <Send className="h-4 w-4 mr-2" />
-                        )}
-                        Add Comment
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Action Buttons - Only for team leaves */}
-                  {selectedLeave.status === 'pending' && !selectedLeave.isManagerLeave && (
-                    <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t">
-                      <Button 
-                        variant="outline" 
-                        className="w-full sm:flex-1 text-sm"
-                        onClick={() => setViewDialogOpen(false)}
-                      >
-                        Close
-                      </Button>
-                      <Button 
-                        variant="destructive" 
-                        className="w-full sm:flex-1 text-sm"
-                        onClick={() => handleRejectLeave(selectedLeave._id || selectedLeave.id || '')}
-                        disabled={!isOnline}
-                      >
-                        <X className="mr-2 h-4 w-4" />
-                        Reject
-                      </Button>
-                      <Button 
-                        className="w-full sm:flex-1 bg-green-600 hover:bg-green-700 text-sm"
-                        onClick={() => handleApproveLeave(selectedLeave._id || selectedLeave.id || '')}
-                        disabled={!isOnline}
-                      >
-                        <Check className="mr-2 h-4 w-4" />
-                        Approve
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </DialogContent>
-          </Dialog>
-
-          {/* Bulk Actions Dialog */}
-          <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
-            <DialogContent className="p-4 sm:p-6">
-              <DialogHeader>
-                <DialogTitle className="text-lg">Bulk Actions</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="text-sm text-muted-foreground">
-                  You have selected {selectedLeaves.length} leave request(s).
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Button 
-                    onClick={() => handleBulkAction('approve')}
-                    className="bg-green-600 hover:bg-green-700 w-full text-sm"
-                    disabled={!isOnline}
-                  >
-                    <Check className="mr-2 h-4 w-4" />
-                    Approve All Selected
-                  </Button>
-                  <Button 
-                    onClick={() => handleBulkAction('reject')}
-                    variant="destructive"
-                    className="w-full text-sm"
-                    disabled={!isOnline}
-                  >
-                    <X className="mr-2 h-4 w-4" />
-                    Reject All Selected
-                  </Button>
-                  <Button 
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedLeaves([]);
-                      setBulkDialogOpen(false);
-                    }}
-                    className="w-full text-sm"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* Calendar View Dialog */}
-          <Dialog open={calendarDialogOpen} onOpenChange={setCalendarDialogOpen}>
-            <DialogContent className="max-w-4xl p-4 sm:p-6">
-              <DialogHeader>
-                <DialogTitle className="text-lg">Leave Calendar View</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <Calendar
-                  mode="single"
-                  selected={calendarDate}
-                  onSelect={(date) => date && setCalendarDate(date)}
-                  className="rounded-md border w-full"
-                />
-                
-                <div className="space-y-2">
-                  <h4 className="font-medium text-sm">Leaves for {format(calendarDate, 'MMMM yyyy')}</h4>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {getCalendarEventsForMonth()
-                      .filter(day => day.events.length > 0)
-                      .map(day => (
-                        <div key={day.date.toISOString()} className="p-2 border rounded">
-                          <div className="font-medium text-sm">{format(day.date, 'MMM d')}</div>
-                          <div className="space-y-1 mt-1">
-                            {day.events.map(event => (
-                              <div key={event.id} className="text-xs p-1 rounded bg-muted break-words">
-                                {event.title} • {event.status}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* Analytics Dialog */}
-          <Dialog open={analyticsDialogOpen} onOpenChange={setAnalyticsDialogOpen}>
-            <DialogContent className="max-w-4xl p-4 sm:p-6">
-              <DialogHeader>
-                <DialogTitle className="text-lg">Leave Analytics Dashboard</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 sm:space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <Card>
-                    <CardHeader className="p-3 sm:p-4">
-                      <CardTitle className="text-sm">Monthly Trend</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-3 sm:p-4">
-                      {analytics.monthlyTrend.length > 0 ? (
-                        <div className="space-y-2">
-                          {analytics.monthlyTrend.map(item => (
-                            <div key={item.month} className="flex justify-between text-xs sm:text-sm">
-                              <span>{item.month}</span>
-                              <span className="font-medium">{item.leaves} leaves</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-center py-4 text-muted-foreground text-sm">
-                          No data available
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                  
-                  <Card>
-                    <CardHeader className="p-3 sm:p-4">
-                      <CardTitle className="text-sm">Leave Type Distribution</CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-3 sm:p-4">
-                      {analytics.leaveTypeDistribution.length > 0 ? (
-                        <div className="space-y-2">
-                          {analytics.leaveTypeDistribution.map(item => (
-                            <div key={item.type} className="flex justify-between text-xs sm:text-sm">
-                              <span className="capitalize">{item.type}</span>
-                              <span className="font-medium">{item.count}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-center py-4 text-muted-foreground text-sm">
-                          No data available
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-                
-                <Card>
-                  <CardHeader className="p-3 sm:p-4">
-                    <CardTitle className="text-sm">Approval Time Statistics</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-3 sm:p-4">
-                    <div className="grid grid-cols-3 gap-2 sm:gap-4">
-                      <div className="text-center">
-                        <div className="text-base sm:text-2xl font-bold text-green-600">
-                          {analytics.approvalTime.average.toFixed(1)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">Avg Days</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-base sm:text-2xl font-bold text-blue-600">
-                          {analytics.approvalTime.min}
-                        </div>
-                        <div className="text-xs text-muted-foreground">Min Days</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-base sm:text-2xl font-bold text-red-600">
-                          {analytics.approvalTime.max}
-                        </div>
-                        <div className="text-xs text-muted-foreground">Max Days</div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* Delegation Dialog */}
-          <Dialog open={delegationDialogOpen} onOpenChange={setDelegationDialogOpen}>
-            <DialogContent className="p-4 sm:p-6">
-              <DialogHeader>
-                <DialogTitle className="text-lg">Delegation Settings</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                {delegation && delegation.isActive ? (
-                  <div className="p-3 sm:p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <div className="flex items-center">
-                      <ShieldCheck className="h-4 w-4 sm:h-5 sm:w-5 text-green-600 mr-2" />
-                      <span className="font-medium text-sm">Delegation Active</span>
-                    </div>
-                    <div className="mt-2 space-y-1 text-sm">
-                      <div className="break-words">To: {delegation.employeeName}</div>
-                      <div>From: {formatDate(delegation.fromDate)}</div>
-                      <div>To: {formatDate(delegation.toDate)}</div>
-                    </div>
-                    <Button variant="outline" className="w-full mt-3 text-sm">
-                      End Delegation
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="text-center py-4">
-                    <Shield className="h-8 w-8 sm:h-12 sm:w-12 mx-auto text-muted-foreground mb-4" />
-                    <h3 className="font-medium text-sm sm:text-base mb-2">No Active Delegation</h3>
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-4">
-                      You can delegate your approval authority to another employee for a specific period.
-                    </p>
-                    <Button size="sm" className="text-sm">
-                      <User className="mr-2 h-4 w-4" />
-                      Setup Delegation
-                    </Button>
                   </div>
                 )}
               </div>
-            </DialogContent>
-          </Dialog>
+            </CardContent>
+          </Card>
         </motion.div>
       </div>
+
+      {/* View Leave Dialog */}
+      <ViewLeaveDialog
+        leave={selectedLeave}
+        open={viewDialogOpen}
+        onOpenChange={setViewDialogOpen}
+        onApprove={onApprove}
+        onReject={onReject}
+        onRevertToPending={onRevertToPending}
+      />
     </>
   );
 };
 
-export default ManagerLeave;
+const ManagerLeaves = () => {
+  const { onMenuClick } = useOutletContext<{ onMenuClick: () => void }>();
+  const navigate = useNavigate();
+  const { user: authUser, isAuthenticated } = useRole();
+  
+  // Current user state
+  const [managerId, setManagerId] = useState<string>('');
+  const [managerName, setManagerName] = useState<string>('');
+  const [managerDepartment, setManagerDepartment] = useState<string>('');
+  const [managerContact, setManagerContact] = useState<string>('');
+  const [managerEmail, setManagerEmail] = useState<string>('');
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState("team-leaves");
+  
+  // Leave data states
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]); // Employee & Supervisor leaves
+  const [managerLeaves, setManagerLeaves] = useState<ManagerLeaveRequest[]>([]); // Manager's own leaves
+  const [sites, setSites] = useState<Site[]>([]);
+  const [siteLeaveData, setSiteLeaveData] = useState<SiteLeaveData[]>([]);
+  
+  // Loading states
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Filter states
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDate, setSelectedDate] = useState<string>(formatDate(new Date()));
+  const [currentPage, setCurrentPage] = useState(1);
+  const [showSiteDetails, setShowSiteDetails] = useState(false);
+  const [selectedSite, setSelectedSite] = useState<SiteLeaveData | null>(null);
+  
+  // My Leaves filter states
+  const [myLeavesFilter, setMyLeavesFilter] = useState<string>("all");
+  const [myLeavesSearch, setMyLeavesSearch] = useState('');
+  const [myLeavesPage, setMyLeavesPage] = useState(1);
+  
+  // Supervisor Leaves filter states
+  const [supervisorFilter, setSupervisorFilter] = useState<string>("all");
+  const [supervisorSearch, setSupervisorSearch] = useState('');
+  const [supervisorPage, setSupervisorPage] = useState(1);
+  
+  // Apply for Leave Dialog
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false);
+  const [applyFormData, setApplyFormData] = useState({
+    leaveType: '',
+    fromDate: '',
+    toDate: '',
+    reason: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // View Details Dialog
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [selectedLeave, setSelectedLeave] = useState<LeaveRequest | null>(null);
+  
+  // View Manager Leave Details Dialog
+  const [viewManagerDialogOpen, setViewManagerDialogOpen] = useState(false);
+  const [selectedManagerLeave, setSelectedManagerLeave] = useState<ManagerLeaveRequest | null>(null);
+  
+  // Edit/Delete states for manager leaves
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedLeaveForEdit, setSelectedLeaveForEdit] = useState<ManagerLeaveRequest | null>(null);
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+  const [isSubmittingDelete, setIsSubmittingDelete] = useState(false);
+  
+  // Statistics
+  const [stats, setStats] = useState<LeaveStats>({
+    total: 0,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    cancelled: 0,
+    supervisorLeaves: 0,
+    employeeLeaves: 0,
+    managerLeaves: 0,
+    totalDays: 0
+  });
+  
+  const itemsPerPage = 10;
+
+  // Initialize current user info
+  useEffect(() => {
+    const fetchCurrentUser = async () => {
+      try {
+        if (authUser) {
+          const userId = authUser._id || authUser.id;
+          
+          if (userId) {
+            const allUsersResponse = await userService.getAllUsers();
+            const foundUser = allUsersResponse.allUsers.find((user: any) => 
+              user._id === userId || user.id === userId
+            );
+            
+            if (foundUser) {
+              setManagerId(foundUser._id);
+              setManagerName(foundUser.name || foundUser.firstName || 'Manager');
+              setManagerDepartment(foundUser.department || '');
+              setManagerContact(foundUser.phone || foundUser.contactNumber || '');
+              setManagerEmail(foundUser.email || '');
+            } else {
+              const storedUser = localStorage.getItem("sk_user");
+              if (storedUser) {
+                const user = JSON.parse(storedUser);
+                setManagerId(user._id || user.id);
+                setManagerName(user.name || user.firstName || 'Manager');
+                setManagerDepartment(user.department || '');
+                setManagerContact(user.phone || user.contactNumber || '');
+                setManagerEmail(user.email || '');
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching current user:', error);
+      }
+    };
+
+    fetchCurrentUser();
+  }, [authUser]);
+
+  // Fetch all data when managerId is available
+  useEffect(() => {
+    if (managerId) {
+      fetchAllData();
+    }
+  }, [managerId]);
+
+  // Recalculate when date changes
+  useEffect(() => {
+    if (sites.length > 0 && activeTab === "team-leaves") {
+      calculateSiteLeaveData(sites, selectedDate);
+    }
+  }, [selectedDate, activeTab]);
+
+  // Fetch all data
+  const fetchAllData = async () => {
+    try {
+      setLoading(true);
+      
+      // Fetch all leave requests (employee & supervisor)
+      const leaves = await fetchAllLeaveRequests(selectedDate);
+      setLeaveRequests(leaves);
+      
+      // Fetch manager's own leaves
+      const myLeaves = await fetchMyManagerLeaves(managerId);
+      console.log('📊 Manager leaves fetched:', myLeaves);
+      setManagerLeaves(myLeaves);
+      
+      // Fetch sites where manager is assigned
+      const sitesData = await fetchManagerSites(managerId);
+      setSites(sitesData);
+      
+      // Calculate site leave data
+      await calculateSiteLeaveData(sitesData, selectedDate, leaves);
+      
+      // Update statistics
+      updateStats(leaves, myLeaves);
+      
+      console.log(`✅ Loaded ${leaves.length} total leaves, ${myLeaves.length} manager leaves, ${sitesData.length} sites`);
+    } catch (error: any) {
+      console.error('❌ Error fetching data:', error);
+      setError(error.message || 'Failed to load data');
+      toast.error('Failed to load leave data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Test API connection
+  const testApiConnection = async () => {
+    try {
+      console.log('🔄 Testing API connection...');
+      
+      // Test main API
+      const testResponse = await fetch(`${API_URL}/test`);
+      if (testResponse.ok) {
+        const testData = await testResponse.json();
+        console.log('✅ Main API test:', testData);
+        toast.success('Main API connected');
+      } else {
+        console.warn('⚠️ Main API test failed');
+      }
+      
+      // Test manager leaves API
+      const managerTestResponse = await fetch(`${API_URL}/manager-leaves/test`);
+      if (managerTestResponse.ok) {
+        const managerTestData = await managerTestResponse.json();
+        console.log('✅ Manager leaves API test:', managerTestData);
+        toast.success('Manager leaves API connected');
+      } else {
+        console.warn('⚠️ Manager leaves API test failed');
+        toast.warning('Manager leaves API not available');
+      }
+    } catch (error) {
+      console.error('❌ API test failed:', error);
+      toast.error('API connection failed');
+    }
+  };
+
+  // Call this in useEffect after managerId is set
+  useEffect(() => {
+    if (managerId) {
+      testApiConnection();
+    }
+  }, [managerId]);
+
+  // Calculate site leave data
+  const calculateSiteLeaveData = async (sitesList: Site[], date: string, leaves?: LeaveRequest[]) => {
+    try {
+      setRefreshing(true);
+      
+      const allLeaves = leaves || leaveRequests;
+      const data: SiteLeaveData[] = [];
+      
+      for (const site of sitesList) {
+        const siteLeave = await generateSiteLeaveData(site, date, allLeaves);
+        data.push(siteLeave);
+      }
+      
+      setSiteLeaveData(data);
+      
+    } catch (error) {
+      console.error('Error calculating site data:', error);
+      toast.error('Error calculating leave data');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Update statistics
+  const updateStats = (leaves: LeaveRequest[], myLeaves: ManagerLeaveRequest[]) => {
+    const supervisorLeaves = leaves.filter(l => l.isSupervisorLeave).length;
+    const employeeLeaves = leaves.filter(l => !l.isSupervisorLeave && !l.isManagerLeave).length;
+    
+    setStats({
+      total: leaves.length + myLeaves.length,
+      pending: leaves.filter(l => l.status === 'pending').length + myLeaves.filter(l => l.status === 'pending').length,
+      approved: leaves.filter(l => l.status === 'approved').length + myLeaves.filter(l => l.status === 'approved').length,
+      rejected: leaves.filter(l => l.status === 'rejected').length + myLeaves.filter(l => l.status === 'rejected').length,
+      cancelled: leaves.filter(l => l.status === 'cancelled').length + myLeaves.filter(l => l.status === 'cancelled').length,
+      supervisorLeaves,
+      employeeLeaves,
+      managerLeaves: myLeaves.length,
+      totalDays: leaves.reduce((sum, l) => sum + l.totalDays, 0) + myLeaves.reduce((sum, l) => sum + l.totalDays, 0)
+    });
+  };
+
+  // Handle approve leave
+  const handleApproveLeave = async (leaveId: string, remarks: string) => {
+    try {
+      const response = await fetch(`${API_URL}/leaves/${leaveId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'approved',
+          managerId,
+          managerName,
+          remarks
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success('Leave approved successfully');
+        await fetchAllData();
+      } else {
+        toast.error(data.message || 'Failed to approve leave');
+      }
+    } catch (error: any) {
+      console.error('❌ Error approving leave:', error);
+      toast.error('Failed to approve leave');
+    }
+  };
+
+  // Handle reject leave
+  const handleRejectLeave = async (leaveId: string, remarks: string) => {
+    try {
+      const response = await fetch(`${API_URL}/leaves/${leaveId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'rejected',
+          managerId,
+          managerName,
+          remarks
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success('Leave rejected successfully');
+        await fetchAllData();
+      } else {
+        toast.error(data.message || 'Failed to reject leave');
+      }
+    } catch (error: any) {
+      console.error('❌ Error rejecting leave:', error);
+      toast.error('Failed to reject leave');
+    }
+  };
+
+  // Handle revert to pending
+  const handleRevertToPending = async (leaveId: string, remarks: string) => {
+    try {
+      const response = await fetch(`${API_URL}/leaves/${leaveId}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'pending',
+          managerId,
+          managerName,
+          remarks
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success('Leave reverted to pending successfully');
+        await fetchAllData();
+      } else {
+        toast.error(data.message || 'Failed to revert leave');
+      }
+    } catch (error: any) {
+      console.error('❌ Error reverting leave:', error);
+      toast.error('Failed to revert leave');
+    }
+  };
+
+  // Handle edit manager leave
+  const handleEditManagerLeave = async (leaveId: string, data: any) => {
+    try {
+      setIsSubmittingEdit(true);
+      
+      console.log('📤 Updating manager leave:', {
+        leaveId,
+        data,
+        endpoint: `${API_URL}/manager-leaves/${leaveId}`
+      });
+      
+      const response = await fetch(`${API_URL}/manager-leaves/${leaveId}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          ...data,
+          updatedBy: managerName
+        })
+      });
+
+      // Check if response is OK
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('❌ Error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          data: errorData
+        });
+        
+        if (response.status === 404) {
+          throw new Error('Manager leave endpoint not found. Please check if backend server is running and routes are configured.');
+        }
+        
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Update response:', result);
+
+      if (result.success) {
+        toast.success('Leave request updated successfully');
+        
+        // Update local state
+        setManagerLeaves(prev => 
+          prev.map(leave => 
+            leave._id === leaveId ? { ...leave, ...data } : leave
+          )
+        );
+        
+        setEditDialogOpen(false);
+      } else {
+        toast.error(result.message || 'Failed to update leave');
+      }
+    } catch (error: any) {
+      console.error('❌ Error updating leave:', error);
+      toast.error(error.message || 'Failed to update leave');
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  // Handle delete manager leave (by ID) - NEW FUNCTION FOR VIEW DIALOG
+  const handleDeleteById = async (leaveId: string) => {
+    try {
+      setIsSubmittingDelete(true);
+      
+      const response = await fetch(`${API_URL}/manager-leaves/${leaveId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deletedBy: managerName
+        })
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        toast.success('Leave request deleted successfully');
+        await fetchAllData();
+        setDeleteDialogOpen(false);
+        setViewManagerDialogOpen(false);
+      } else {
+        toast.error(result.message || 'Failed to delete leave');
+      }
+    } catch (error: any) {
+      console.error('Error deleting leave:', error);
+      toast.error('Failed to delete leave');
+    } finally {
+      setIsSubmittingDelete(false);
+    }
+  };
+
+  // Handle delete manager leave (by object) - FOR TABLE DELETE ICON
+  const handleDeleteClick = (leave: ManagerLeaveRequest) => {
+    setSelectedLeaveForEdit(leave);
+    setDeleteDialogOpen(true);
+  };
+
+  // Handle apply for manager leave
+  const handleApplyManagerLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Validation
+    if (!applyFormData.leaveType) {
+      toast.error('Please select leave type');
+      return;
+    }
+    
+    if (!applyFormData.fromDate || !applyFormData.toDate) {
+      toast.error('Please select dates');
+      return;
+    }
+    
+    const fromDate = new Date(applyFormData.fromDate);
+    const toDate = new Date(applyFormData.toDate);
+    
+    if (fromDate > toDate) {
+      toast.error('From date must be before to date');
+      return;
+    }
+    
+    const totalDays = calculateDaysBetween(applyFormData.fromDate, applyFormData.toDate);
+    
+    if (!applyFormData.reason) {
+      toast.error('Please provide a reason');
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      // Prepare data - NO EMPLOYEE VALIDATION
+      const leaveData = {
+        managerId,
+        managerName,
+        managerDepartment,
+        managerPosition: 'Manager',
+        managerEmail,
+        managerContact: managerContact || '0000000000',
+        leaveType: applyFormData.leaveType,
+        fromDate: applyFormData.fromDate,
+        toDate: applyFormData.toDate,
+        totalDays,
+        reason: applyFormData.reason,
+        appliedBy: managerName,
+        appliedDate: new Date().toISOString()
+      };
+
+      console.log('📤 Submitting manager leave:', leaveData);
+
+      const response = await fetch(`${API_URL}/manager-leaves/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(leaveData)
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success('Leave request submitted successfully! Waiting for superadmin approval.');
+        setApplyDialogOpen(false);
+        setApplyFormData({
+          leaveType: '',
+          fromDate: '',
+          toDate: '',
+          reason: ''
+        });
+        // Refresh data
+        await fetchAllData();
+        setActiveTab('my-leaves');
+      } else {
+        toast.error(data.message || 'Failed to apply for leave');
+      }
+    } catch (error: any) {
+      console.error('❌ Error applying for leave:', error);
+      toast.error('Failed to apply for leave');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle view site details
+  const handleViewSiteDetails = (site: SiteLeaveData) => {
+    setSelectedSite(site);
+    setShowSiteDetails(true);
+  };
+
+  // Handle back from site details
+  const handleBackFromSiteDetails = () => {
+    setShowSiteDetails(false);
+    setSelectedSite(null);
+  };
+
+  // Handle view manager leave details
+  const handleViewManagerLeave = (leave: ManagerLeaveRequest) => {
+    setSelectedManagerLeave(leave);
+    setViewManagerDialogOpen(true);
+  };
+
+  // Handle edit click
+  const handleEditClick = (leave: ManagerLeaveRequest) => {
+    setSelectedLeaveForEdit(leave);
+    setEditDialogOpen(true);
+  };
+
+  // Handle refresh all data
+  const handleRefresh = async () => {
+    await fetchAllData();
+    toast.success('Data refreshed successfully');
+  };
+
+  // Handle date change
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSelectedDate(e.target.value);
+    setCurrentPage(1);
+  };
+
+  // Filter sites based on search
+  const filteredSites = useMemo(() => {
+    if (!siteLeaveData || siteLeaveData.length === 0) return [];
+    
+    return siteLeaveData.filter(site =>
+      site.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      site.clientName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      site.location?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [siteLeaveData, searchTerm]);
+
+  // Filter supervisor leaves
+  const filteredSupervisorLeaves = useMemo(() => {
+    const supervisorLeaves = leaveRequests.filter(l => l.isSupervisorLeave);
+    
+    let filtered = supervisorLeaves;
+    
+    if (supervisorFilter !== 'all') {
+      filtered = filtered.filter(l => l.status === supervisorFilter);
+    }
+    
+    if (supervisorSearch) {
+      filtered = filtered.filter(l =>
+        l.employeeName.toLowerCase().includes(supervisorSearch.toLowerCase()) ||
+        l.employeeId.toLowerCase().includes(supervisorSearch.toLowerCase()) ||
+        l.leaveType.toLowerCase().includes(supervisorSearch.toLowerCase())
+      );
+    }
+    
+    return filtered;
+  }, [leaveRequests, supervisorFilter, supervisorSearch]);
+
+  // Filter my leaves (manager's own leaves)
+  const filteredMyLeaves = useMemo(() => {
+    let filtered = managerLeaves;
+    
+    if (myLeavesFilter !== 'all') {
+      filtered = filtered.filter(l => l.status === myLeavesFilter);
+    }
+    
+    if (myLeavesSearch) {
+      filtered = filtered.filter(l =>
+        l.leaveType.toLowerCase().includes(myLeavesSearch.toLowerCase()) ||
+        l.reason.toLowerCase().includes(myLeavesSearch.toLowerCase())
+      );
+    }
+    
+    return filtered;
+  }, [managerLeaves, myLeavesFilter, myLeavesSearch]);
+
+  // Paginate sites
+  const paginatedSites = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredSites.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredSites, currentPage]);
+
+  // Paginate supervisor leaves
+  const paginatedSupervisorLeaves = useMemo(() => {
+    const startIndex = (supervisorPage - 1) * itemsPerPage;
+    return filteredSupervisorLeaves.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredSupervisorLeaves, supervisorPage]);
+
+  // Paginate my leaves
+  const paginatedMyLeaves = useMemo(() => {
+    const startIndex = (myLeavesPage - 1) * itemsPerPage;
+    return filteredMyLeaves.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredMyLeaves, myLeavesPage]);
+
+  const totalSitePages = Math.ceil(filteredSites.length / itemsPerPage);
+  const totalSupervisorPages = Math.ceil(filteredSupervisorLeaves.length / itemsPerPage);
+  const totalMyLeavesPages = Math.ceil(filteredMyLeaves.length / itemsPerPage);
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'rejected':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'pending':
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case 'cancelled':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getRoleBadge = (leave: LeaveRequest) => {
+    if (leave.isManagerLeave) {
+      return <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-300">Manager</Badge>;
+    } else if (leave.isSupervisorLeave) {
+      return <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-300">Supervisor</Badge>;
+    } else {
+      return <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300">Employee</Badge>;
+    }
+  };
+
+  const getLeaveTypeBadge = (type: string) => {
+    switch (type) {
+      case 'annual':
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case 'sick':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'casual':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'maternity':
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case 'paternity':
+        return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case 'bereavement':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      case 'unpaid':
+        return "bg-orange-100 text-orange-800 border-orange-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  const getManagerLeaveTypeBadge = (type: string) => {
+    switch (type) {
+      case 'annual':
+        return "bg-blue-100 text-blue-800 border-blue-200";
+      case 'sick':
+        return "bg-red-100 text-red-800 border-red-200";
+      case 'casual':
+        return "bg-green-100 text-green-800 border-green-200";
+      case 'maternity':
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case 'paternity':
+        return "bg-indigo-100 text-indigo-800 border-indigo-200";
+      case 'bereavement':
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      case 'unpaid':
+        return "bg-orange-100 text-orange-800 border-orange-200";
+      default:
+        return "bg-gray-100 text-gray-800 border-gray-200";
+    }
+  };
+
+  // If showing site details, render the details component
+  if (showSiteDetails && selectedSite) {
+    return (
+      <SiteLeaveDetails
+        siteData={selectedSite}
+        onBack={handleBackFromSiteDetails}
+        selectedDate={selectedDate}
+        onApprove={handleApproveLeave}
+        onReject={handleRejectLeave}
+        onRevertToPending={handleRevertToPending}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <DashboardHeader 
+        title="Leave Management" 
+        subtitle="Manage team leaves, supervisor leaves, and your personal leaves"
+        onMenuClick={onMenuClick}
+      />
+      
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="p-6 space-y-6"
+      >
+        {/* Manager Info Card */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <Crown className="h-5 w-5 text-primary" />
+                  {managerName}
+                </h3>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Badge variant="default" className="text-sm capitalize">
+                    Manager
+                  </Badge>
+                  {managerDepartment && (
+                    <Badge variant="outline" className="text-sm">
+                      <Briefcase className="h-3 w-3 mr-1" />
+                      {managerDepartment}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+                  <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+                <Button variant="default" size="sm" onClick={() => setApplyDialogOpen(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Apply for Leave
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Statistics Cards */}
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Leaves</CardTitle>
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.total}</div>
+              <p className="text-xs text-muted-foreground">
+                {stats.pending} pending • {stats.approved} approved
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Supervisor Leaves</CardTitle>
+              <Shield className="h-4 w-4 text-amber-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-amber-600">{stats.supervisorLeaves}</div>
+              <p className="text-xs text-muted-foreground">From supervisors</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Employee Leaves</CardTitle>
+              <User className="h-4 w-4 text-blue-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-blue-600">{stats.employeeLeaves}</div>
+              <p className="text-xs text-muted-foreground">From employees</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">My Leaves</CardTitle>
+              <Crown className="h-4 w-4 text-purple-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-purple-600">{stats.managerLeaves}</div>
+              <p className="text-xs text-muted-foreground">Your personal leaves</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Main Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList className="grid w-full grid-cols-3 lg:w-[600px]">
+            <TabsTrigger value="team-leaves" className="flex items-center gap-2">
+              <Building className="h-4 w-4" />
+              Team Leaves
+            </TabsTrigger>
+            <TabsTrigger value="supervisor-leaves" className="flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Supervisor Leaves
+            </TabsTrigger>
+            <TabsTrigger value="my-leaves" className="flex items-center gap-2">
+              <Crown className="h-4 w-4" />
+              My Leaves
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Team Leaves Tab */}
+          <TabsContent value="team-leaves" className="space-y-6">
+            {/* Filters with Date Selection */}
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={selectedDate}
+                      onChange={handleDateChange}
+                      className="w-40"
+                    />
+                    <Button variant="outline" size="sm" onClick={() => setSelectedDate(formatDate(new Date()))}>
+                      Today
+                    </Button>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 flex-1 max-w-sm">
+                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search sites..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 text-sm text-muted-foreground">
+                  Showing leave data for {formatDateDisplay(selectedDate)}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Loading State */}
+            {loading && (
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="ml-3 text-muted-foreground">Loading sites data...</p>
+              </div>
+            )}
+
+            {/* Error State */}
+            {error && !loading && (
+              <Card>
+                <CardContent className="py-8">
+                  <div className="text-center">
+                    <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium mb-2">Error Loading Data</h3>
+                    <p className="text-muted-foreground mb-4">{error}</p>
+                    <Button onClick={handleRefresh}>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Retry
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Sites Table */}
+            {!loading && !error && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CalendarDays className="h-5 w-5" />
+                    Sites Leave Overview - {formatDateDisplay(selectedDate)}
+                  </CardTitle>
+                  <CardDescription>
+                    Showing {filteredSites.length} sites • {siteLeaveData.reduce((sum, site) => sum + site.totalEmployees, 0)} total employees
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {filteredSites.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Building className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No Sites Found</h3>
+                      <p className="text-gray-500">
+                        {searchTerm
+                          ? 'No sites match your search criteria.'
+                          : 'No sites are currently assigned to you.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted/50">
+                              <th className="h-12 px-4 text-left font-medium">Site Name</th>
+                              <th className="h-12 px-4 text-left font-medium">Client</th>
+                              <th className="h-12 px-4 text-left font-medium">Location</th>
+                              <th className="h-12 px-4 text-left font-medium">Total Emp</th>
+                              <th className="h-12 px-4 text-left font-medium text-yellow-700 bg-yellow-50">Pending</th>
+                              <th className="h-12 px-4 text-left font-medium text-green-700 bg-green-50">Approved</th>
+                              <th className="h-12 px-4 text-left font-medium text-red-700 bg-red-50">Rejected</th>
+                              <th className="h-12 px-4 text-left font-medium text-amber-700 bg-amber-50">Supervisor</th>
+                              <th className="h-12 px-4 text-left font-medium text-blue-700 bg-blue-50">Employee</th>
+                              <th className="h-12 px-4 text-left font-medium text-purple-700 bg-purple-50">Manager</th>
+                              <th className="h-12 px-4 text-left font-medium">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {paginatedSites.map((site) => (
+                              <tr key={site.id} className="border-b hover:bg-muted/50">
+                                <td className="p-4 align-middle font-medium">
+                                  <div className="font-medium">{site.name}</div>
+                                  {site.isRealData && (
+                                    <Badge variant="outline" className="mt-1 text-xs bg-green-50">
+                                      Real Data
+                                    </Badge>
+                                  )}
+                                </td>
+                                <td className="p-4 align-middle">{site.clientName || '-'}</td>
+                                <td className="p-4 align-middle">
+                                  <div className="flex items-center gap-1">
+                                    <MapPin className="h-3 w-3 text-muted-foreground" />
+                                    {site.location || '-'}
+                                  </div>
+                                </td>
+                                <td className="p-4 align-middle font-bold">{site.totalEmployees}</td>
+                                <td className="p-4 align-middle font-bold text-yellow-700 bg-yellow-50">{site.pendingLeaves}</td>
+                                <td className="p-4 align-middle font-bold text-green-700 bg-green-50">{site.approvedLeaves}</td>
+                                <td className="p-4 align-middle font-bold text-red-700 bg-red-50">{site.rejectedLeaves}</td>
+                                <td className="p-4 align-middle font-bold text-amber-700 bg-amber-50">{site.supervisorLeaves}</td>
+                                <td className="p-4 align-middle font-bold text-blue-700 bg-blue-50">{site.employeeLeaves}</td>
+                                <td className="p-4 align-middle font-bold text-purple-700 bg-purple-50">{site.managerLeaves}</td>
+                                <td className="p-4 align-middle">
+                                  <Button variant="outline" size="sm" onClick={() => handleViewSiteDetails(site)}>
+                                    <Eye className="h-4 w-4 mr-1" />
+                                    View
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagination */}
+                      {filteredSites.length > 0 && (
+                        <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                          <div className="text-sm text-muted-foreground">
+                            Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredSites.length)} of {filteredSites.length} sites
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>
+                              First
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
+                              Previous
+                            </Button>
+                            <span className="text-sm">
+                              Page {currentPage} of {totalSitePages}
+                            </span>
+                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalSitePages}>
+                              Next
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setCurrentPage(totalSitePages)} disabled={currentPage === totalSitePages}>
+                              Last
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* Supervisor Leaves Tab */}
+          <TabsContent value="supervisor-leaves" className="space-y-6">
+            {/* Filters */}
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Select value={supervisorFilter} onValueChange={setSupervisorFilter}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 flex-1 max-w-sm">
+                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search supervisors..."
+                      value={supervisorSearch}
+                      onChange={(e) => setSupervisorSearch(e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Supervisor Leaves Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-amber-600" />
+                  Supervisor Leave Requests
+                </CardTitle>
+                <CardDescription>
+                  Showing {filteredSupervisorLeaves.length} supervisor leave requests
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {filteredSupervisorLeaves.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Shield className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Supervisor Leaves</h3>
+                    <p className="text-gray-500">
+                      {supervisorSearch || supervisorFilter !== 'all'
+                        ? 'No supervisor leave requests match your filters.'
+                        : 'No supervisor leave requests found.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-md border">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b bg-muted/50">
+                            <th className="h-12 px-4 text-left font-medium">Supervisor</th>
+                            <th className="h-12 px-4 text-left font-medium">ID</th>
+                            <th className="h-12 px-4 text-left font-medium">Leave Type</th>
+                            <th className="h-12 px-4 text-left font-medium">Dates</th>
+                            <th className="h-12 px-4 text-left font-medium">Days</th>
+                            <th className="h-12 px-4 text-left font-medium">Status</th>
+                            <th className="h-12 px-4 text-left font-medium">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedSupervisorLeaves.map((leave) => (
+                            <tr key={leave._id} className="border-b hover:bg-muted/50">
+                              <td className="p-4 align-middle font-medium">{leave.employeeName}</td>
+                              <td className="p-4 align-middle font-mono text-xs">{leave.employeeId}</td>
+                              <td className="p-4 align-middle">
+                                <Badge className={getLeaveTypeBadge(leave.leaveType)}>
+                                  {leave.leaveType}
+                                </Badge>
+                              </td>
+                              <td className="p-4 align-middle">
+                                <div className="text-xs">
+                                  <div>{formatDateDisplay(leave.fromDate)}</div>
+                                  <div>to {formatDateDisplay(leave.toDate)}</div>
+                                </div>
+                              </td>
+                              <td className="p-4 align-middle font-bold">{leave.totalDays}</td>
+                              <td className="p-4 align-middle">
+                                <Badge className={getStatusBadge(leave.status)}>
+                                  {leave.status}
+                                </Badge>
+                              </td>
+                              <td className="p-4 align-middle">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    setSelectedLeave(leave);
+                                    setViewDialogOpen(true);
+                                  }}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Pagination */}
+                    {filteredSupervisorLeaves.length > 0 && (
+                      <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                        <div className="text-sm text-muted-foreground">
+                          Showing {((supervisorPage - 1) * itemsPerPage) + 1} to {Math.min(supervisorPage * itemsPerPage, filteredSupervisorLeaves.length)} of {filteredSupervisorLeaves.length} leaves
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Button variant="outline" size="sm" onClick={() => setSupervisorPage(1)} disabled={supervisorPage === 1}>
+                            First
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setSupervisorPage(supervisorPage - 1)} disabled={supervisorPage === 1}>
+                            Previous
+                          </Button>
+                          <span className="text-sm">
+                            Page {supervisorPage} of {totalSupervisorPages}
+                          </span>
+                          <Button variant="outline" size="sm" onClick={() => setSupervisorPage(supervisorPage + 1)} disabled={supervisorPage === totalSupervisorPages}>
+                            Next
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setSupervisorPage(totalSupervisorPages)} disabled={supervisorPage === totalSupervisorPages}>
+                            Last
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* My Leaves Tab */}
+          <TabsContent value="my-leaves" className="space-y-6">
+            {/* Filters */}
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Select value={myLeavesFilter} onValueChange={setMyLeavesFilter}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div className="flex items-center gap-2 flex-1 max-w-sm">
+                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by leave type, reason..."
+                      value={myLeavesSearch}
+                      onChange={(e) => setMyLeavesSearch(e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* My Leaves Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Crown className="h-5 w-5 text-purple-600" />
+                  My Leave Requests
+                </CardTitle>
+                <CardDescription>
+                  Showing {filteredMyLeaves.length} of your personal leave requests
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {filteredMyLeaves.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Crown className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Personal Leaves</h3>
+                    <p className="text-gray-500 mb-4">
+                      {myLeavesSearch || myLeavesFilter !== 'all' 
+                        ? 'No leave requests match your filters.'
+                        : 'You haven\'t applied for any leaves yet.'}
+                    </p>
+                    <Button onClick={() => setApplyDialogOpen(true)}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Apply for Leave
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="rounded-md border">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b bg-muted/50">
+                            <th className="h-12 px-4 text-left font-medium">Leave Type</th>
+                            <th className="h-12 px-4 text-left font-medium">From Date</th>
+                            <th className="h-12 px-4 text-left font-medium">To Date</th>
+                            <th className="h-12 px-4 text-left font-medium">Days</th>
+                            <th className="h-12 px-4 text-left font-medium">Status</th>
+                            <th className="h-12 px-4 text-left font-medium">Reason</th>
+                            <th className="h-12 px-4 text-left font-medium">Applied On</th>
+                            <th className="h-12 px-4 text-left font-medium">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedMyLeaves.map((leave) => (
+                            <tr key={leave._id} className="border-b hover:bg-muted/50">
+                              <td className="p-4 align-middle">
+                                <Badge className={getManagerLeaveTypeBadge(leave.leaveType)}>
+                                  {leave.leaveType}
+                                </Badge>
+                              </td>
+                              <td className="p-4 align-middle">{formatDateDisplay(leave.fromDate)}</td>
+                              <td className="p-4 align-middle">{formatDateDisplay(leave.toDate)}</td>
+                              <td className="p-4 align-middle font-bold">{leave.totalDays}</td>
+                              <td className="p-4 align-middle">
+                                <Badge className={getStatusBadge(leave.status)}>
+                                  {leave.status}
+                                </Badge>
+                              </td>
+                              <td className="p-4 align-middle max-w-xs truncate">{leave.reason}</td>
+                              <td className="p-4 align-middle text-xs">{formatDateDisplay(leave.appliedDate)}</td>
+                              <td className="p-4 align-middle">
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => handleViewManagerLeave(leave)}
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  
+                                  {leave.status === 'pending' && (
+                                    <>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 text-blue-600"
+                                        onClick={() => handleEditClick(leave)}
+                                      >
+                                        <Edit className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 text-red-600"
+                                        onClick={() => handleDeleteClick(leave)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Pagination */}
+                    {filteredMyLeaves.length > 0 && (
+                      <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                        <div className="text-sm text-muted-foreground">
+                          Showing {((myLeavesPage - 1) * itemsPerPage) + 1} to {Math.min(myLeavesPage * itemsPerPage, filteredMyLeaves.length)} of {filteredMyLeaves.length} leaves
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Button variant="outline" size="sm" onClick={() => setMyLeavesPage(1)} disabled={myLeavesPage === 1}>
+                            First
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setMyLeavesPage(myLeavesPage - 1)} disabled={myLeavesPage === 1}>
+                            Previous
+                          </Button>
+                          <span className="text-sm">
+                            Page {myLeavesPage} of {totalMyLeavesPages}
+                          </span>
+                          <Button variant="outline" size="sm" onClick={() => setMyLeavesPage(myLeavesPage + 1)} disabled={myLeavesPage === totalMyLeavesPages}>
+                            Next
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setMyLeavesPage(totalMyLeavesPages)} disabled={myLeavesPage === totalMyLeavesPages}>
+                            Last
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        {/* Apply for Leave Dialog */}
+        <Dialog open={applyDialogOpen} onOpenChange={setApplyDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Plus className="h-5 w-5" />
+                Apply for Leave
+              </DialogTitle>
+              <DialogDescription>
+                Submit a leave request for yourself. This will be sent to superadmin for approval.
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={handleApplyManagerLeave} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="leaveType">Leave Type *</Label>
+                <Select
+                  value={applyFormData.leaveType}
+                  onValueChange={(value) => setApplyFormData(prev => ({ ...prev, leaveType: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select leave type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="annual">Annual Leave</SelectItem>
+                    <SelectItem value="sick">Sick Leave</SelectItem>
+                    <SelectItem value="casual">Casual Leave</SelectItem>
+                    <SelectItem value="maternity">Maternity Leave</SelectItem>
+                    <SelectItem value="paternity">Paternity Leave</SelectItem>
+                    <SelectItem value="bereavement">Bereavement Leave</SelectItem>
+                    <SelectItem value="unpaid">Unpaid Leave</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="fromDate">From Date *</Label>
+                  <Input
+                    id="fromDate"
+                    type="date"
+                    value={applyFormData.fromDate}
+                    onChange={(e) => setApplyFormData(prev => ({ ...prev, fromDate: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="toDate">To Date *</Label>
+                  <Input
+                    id="toDate"
+                    type="date"
+                    value={applyFormData.toDate}
+                    onChange={(e) => setApplyFormData(prev => ({ ...prev, toDate: e.target.value }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {applyFormData.fromDate && applyFormData.toDate && (
+                <div className="text-sm text-muted-foreground">
+                  Total Days: {calculateDaysBetween(applyFormData.fromDate, applyFormData.toDate)} days
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="reason">Reason *</Label>
+                <Textarea
+                  id="reason"
+                  value={applyFormData.reason}
+                  onChange={(e) => setApplyFormData(prev => ({ ...prev, reason: e.target.value }))}
+                  placeholder="Please provide a reason for leave"
+                  required
+                  rows={3}
+                />
+              </div>
+
+              <DialogFooter className="flex gap-2 pt-4">
+                <Button type="button" variant="outline" onClick={() => setApplyDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Submit Request
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* View Details Dialog for Employee/Supervisor Leaves */}
+        <ViewLeaveDialog
+          leave={selectedLeave}
+          open={viewDialogOpen}
+          onOpenChange={setViewDialogOpen}
+          onApprove={handleApproveLeave}
+          onReject={handleRejectLeave}
+          onRevertToPending={handleRevertToPending}
+        />
+
+        {/* View Details Dialog for Manager Leaves - UPDATED WITH onDeleteById PROP */}
+        <ViewManagerLeaveDialog
+          leave={selectedManagerLeave}
+          open={viewManagerDialogOpen}
+          onOpenChange={setViewManagerDialogOpen}
+          onEdit={handleEditClick}
+          onDelete={handleDeleteClick}
+          onDeleteById={handleDeleteById}
+        />
+
+        {/* Edit Manager Leave Dialog */}
+        <EditManagerLeaveDialog
+          leave={selectedLeaveForEdit}
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
+          onSave={handleEditManagerLeave}
+        />
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 text-red-600">
+                <Trash2 className="h-5 w-5" />
+                Delete Leave Request
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete this leave request? This action cannot be undone.
+                {selectedLeaveForEdit && (
+                  <div className="mt-4 p-3 bg-muted/30 rounded-lg">
+                    <p className="font-medium">{selectedLeaveForEdit.managerName}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedLeaveForEdit.leaveType} • {selectedLeaveForEdit.totalDays} days
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {formatDateDisplay(selectedLeaveForEdit.fromDate)} to {formatDateDisplay(selectedLeaveForEdit.toDate)}
+                    </p>
+                  </div>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => handleDeleteById(selectedLeaveForEdit?._id || '')}
+                className="bg-red-600 hover:bg-red-700"
+                disabled={isSubmittingDelete}
+              >
+                {isSubmittingDelete && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </motion.div>
+    </div>
+  );
+};
+
+export default ManagerLeaves;

@@ -1,7 +1,27 @@
+// controllers/attendanceController.ts
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import multer from 'multer';
 import Attendance, { IAttendance } from '../models/attendance';
-import Employee from '../models/Employee'; // Use uppercase E to match other imports
+import Employee from '../models/Employee';
+import { uploadAttendancePhoto, deleteFromCloudinary } from '../utils/CloudinaryUtils';
+
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
+export const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only image files
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  },
+});
 
 // Helper function to calculate time difference in hours
 const calculateHours = (startTime: string | null, endTime: string | null): number => {
@@ -16,152 +36,227 @@ const formatDate = (date: Date): string => {
   return date.toISOString().split('T')[0];
 };
 
-// Update attendance status (for supervisors)
-export const updateAttendanceStatus = async (req: Request, res: Response) => {
+// Check in with photo
+export const checkInWithPhoto = async (req: Request, res: Response) => {
   try {
-    const { 
-      employeeId, 
-      attendanceId, 
-      date, 
-      status, 
-      remarks, 
-      supervisorId,
-      employeeName 
-    } = req.body;
-
-    console.log('📝 Updating attendance status:', {
-      employeeId,
-      attendanceId,
-      date,
-      status,
-      remarks,
-      supervisorId,
-      employeeName
-    });
-
-    // Validate required fields
-    if (!employeeId || !date || !status) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: employeeId, date, and status are required'
-      });
-    }
-
-    // Validate status
-    const validStatuses = ['present', 'absent', 'half-day', 'leave', 'weekly-off'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid status. Must be one of: present, absent, half-day, leave, weekly-off'
-      });
-    }
-
-    // Parse and validate date
-    const attendanceDate = new Date(date);
-    if (isNaN(attendanceDate.getTime())) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid date format'
-      });
-    }
-
-    const formattedDate = formatDate(attendanceDate);
-
-    // Check if attendance record exists
-    let attendanceRecord;
+    const { employeeId, employeeName, supervisorId } = req.body;
+    const photoFile = req.file;
     
-    if (attendanceId && mongoose.Types.ObjectId.isValid(attendanceId)) {
-      // Update existing record by ID
-      attendanceRecord = await Attendance.findById(attendanceId);
-      
-      if (!attendanceRecord) {
-        return res.status(404).json({
-          success: false,
-          message: 'Attendance record not found'
-        });
-      }
-      
-      // Update the record
-      attendanceRecord.status = status as any;
-      if (remarks !== undefined) attendanceRecord.remarks = remarks;
-      if (supervisorId) attendanceRecord.supervisorId = supervisorId;
-      
-      await attendanceRecord.save();
-      
-    } else {
-      // Check if record exists for this employee and date
-      attendanceRecord = await Attendance.findOne({
-        employeeId,
-        date: formattedDate
+    if (!employeeId || !employeeName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee ID and name are required',
       });
-      
-      if (attendanceRecord) {
-        // Update existing record
-        attendanceRecord.status = status as any;
-        if (remarks !== undefined) attendanceRecord.remarks = remarks;
-        if (supervisorId) attendanceRecord.supervisorId = supervisorId;
-        
-        await attendanceRecord.save();
-      } else {
-        // Try to get employee name if not provided
-        let finalEmployeeName = employeeName;
-        let employeeDepartment = 'General';
-        let employeeSiteName = null;
-        
-        if (!finalEmployeeName) {
-          const employee = await Employee.findById(employeeId);
-          finalEmployeeName = employee?.name || 'Unknown Employee';
-          employeeDepartment = employee?.department || 'General';
-          employeeSiteName = employee?.siteName || null;
-        }
-
-        // Create new attendance record
-        const newAttendance = new Attendance({
-          employeeId,
-          employeeName: finalEmployeeName,
-          date: formattedDate,
-          status,
-          remarks: remarks || '',
-          supervisorId: supervisorId || null,
-          isCheckedIn: false,
-          isOnBreak: false,
-          checkInTime: null,
-          checkOutTime: null,
-          breakStartTime: null,
-          breakEndTime: null,
-          totalHours: 0,
-          breakTime: 0,
-          department: employeeDepartment,
-          siteName: employeeSiteName
-        });
-        
-        attendanceRecord = await newAttendance.save();
-      }
     }
 
-    console.log('✅ Attendance status updated successfully:', {
-      id: attendanceRecord._id,
-      employeeId: attendanceRecord.employeeId,
-      status: attendanceRecord.status,
-      date: attendanceRecord.date
+    if (!photoFile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Photo is required for check-in',
+      });
+    }
+
+    const today = formatDate(new Date());
+
+    // Check if already checked in today
+    const existingAttendance = await Attendance.findOne({
+      employeeId,
+      date: today,
     });
 
-    return res.status(200).json({
+    if (existingAttendance?.isCheckedIn) {
+      return res.status(400).json({
+        success: false,
+        message: 'Already checked in for today',
+      });
+    }
+
+    // Upload photo to Cloudinary
+    let photoUrl = '';
+    let photoPublicId = '';
+    try {
+      const uploadResult = await uploadAttendancePhoto(
+        photoFile.buffer,
+        employeeId,
+        employeeName,
+        'checkin'
+      );
+      photoUrl = uploadResult.secure_url;
+      photoPublicId = uploadResult.public_id;
+    } catch (uploadError: any) {
+      console.error('Photo upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: `Failed to upload photo: ${uploadError.message}`,
+      });
+    }
+
+    const checkInTime = new Date().toISOString();
+
+    let attendance: IAttendance | null;
+    
+    if (existingAttendance) {
+      // Update existing record
+      attendance = await Attendance.findByIdAndUpdate(
+        existingAttendance._id,
+        {
+          checkInTime,
+          checkInPhoto: photoUrl,
+          isCheckedIn: true,
+          status: 'present',
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+      
+      if (!attendance) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update attendance record',
+        });
+      }
+    } else {
+      // Get employee details for department/site
+      const employee = await Employee.findById(employeeId);
+      
+      // Create new attendance record
+      attendance = await Attendance.create({
+        employeeId,
+        employeeName,
+        date: today,
+        checkInTime,
+        checkInPhoto: photoUrl,
+        checkOutTime: null,
+        checkOutPhoto: null,
+        breakStartTime: null,
+        breakEndTime: null,
+        totalHours: 0,
+        breakTime: 0,
+        status: 'present',
+        isCheckedIn: true,
+        isOnBreak: false,
+        supervisorId: supervisorId || null,
+        department: employee?.department || 'General',
+        siteName: employee?.siteName || null
+      });
+    }
+
+    res.status(200).json({
       success: true,
-      message: `Attendance status updated to ${status} successfully`,
-      data: attendanceRecord
+      message: 'Checked in successfully with photo',
+      data: {
+        ...attendance.toJSON(),
+        checkInPhoto: photoUrl,
+      },
     });
-
   } catch (error: any) {
-    console.error('❌ Error updating attendance status:', error);
-    return res.status(500).json({
+    console.error('❌ Check-in error:', error.message);
+    res.status(500).json({
       success: false,
-      message: error.message || 'Internal server error while updating attendance status'
+      message: 'Error checking in',
+      error: error.message,
     });
   }
 };
 
-// Check in
+// Check out with photo
+export const checkOutWithPhoto = async (req: Request, res: Response) => {
+  try {
+    const { employeeId } = req.body;
+    const photoFile = req.file;
+    
+    if (!employeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee ID is required',
+      });
+    }
+
+    if (!photoFile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Photo is required for check-out',
+      });
+    }
+
+    const today = formatDate(new Date());
+    const checkOutTime = new Date().toISOString();
+
+    const attendance = await Attendance.findOne({
+      employeeId,
+      date: today,
+      isCheckedIn: true,
+    });
+
+    if (!attendance) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active check-in found',
+      });
+    }
+
+    // Upload photo to Cloudinary
+    let photoUrl = '';
+    let photoPublicId = '';
+    try {
+      const uploadResult = await uploadAttendancePhoto(
+        photoFile.buffer,
+        employeeId,
+        attendance.employeeName,
+        'checkout'
+      );
+      photoUrl = uploadResult.secure_url;
+      photoPublicId = uploadResult.public_id;
+    } catch (uploadError: any) {
+      console.error('Photo upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: `Failed to upload photo: ${uploadError.message}`,
+      });
+    }
+
+    // Calculate total hours
+    const totalHours = calculateHours(attendance.checkInTime, checkOutTime);
+    
+    // Update attendance
+    const updatedAttendance = await Attendance.findByIdAndUpdate(
+      attendance._id,
+      {
+        checkOutTime,
+        checkOutPhoto: photoUrl,
+        isCheckedIn: false,
+        isOnBreak: false,
+        totalHours,
+        updatedAt: new Date(),
+      },
+      { new: true }
+    );
+
+    if (!updatedAttendance) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to update attendance record',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Checked out successfully with photo',
+      data: updatedAttendance,
+      totalHours: totalHours.toFixed(2),
+      checkOutPhoto: photoUrl,
+    });
+  } catch (error: any) {
+    console.error('❌ Check-out error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error checking out',
+      error: error.message,
+    });
+  }
+};
+
+// Regular check in (without photo) - for backward compatibility
 export const checkIn = async (req: Request, res: Response) => {
   try {
     const { employeeId, employeeName, supervisorId } = req.body;
@@ -250,7 +345,7 @@ export const checkIn = async (req: Request, res: Response) => {
   }
 };
 
-// Check out
+// Regular check out (without photo) - for backward compatibility
 export const checkOut = async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.body;
@@ -317,7 +412,7 @@ export const checkOut = async (req: Request, res: Response) => {
   }
 };
 
-// Break in
+// Break in (no photo required for break)
 export const breakIn = async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.body;
@@ -379,7 +474,7 @@ export const breakIn = async (req: Request, res: Response) => {
   }
 };
 
-// Break out
+// Break out (no photo required for break)
 export const breakOut = async (req: Request, res: Response) => {
   try {
     const { employeeId } = req.body;
@@ -475,6 +570,8 @@ export const getTodayStatus = async (req: Request, res: Response) => {
           isOnBreak: false,
           checkInTime: null,
           checkOutTime: null,
+          checkInPhoto: null,
+          checkOutPhoto: null,
           breakStartTime: null,
           breakEndTime: null,
           totalHours: 0,
@@ -492,6 +589,8 @@ export const getTodayStatus = async (req: Request, res: Response) => {
         isOnBreak: attendance.isOnBreak,
         checkInTime: attendance.checkInTime,
         checkOutTime: attendance.checkOutTime,
+        checkInPhoto: attendance.checkInPhoto,
+        checkOutPhoto: attendance.checkOutPhoto,
         breakStartTime: attendance.breakStartTime,
         breakEndTime: attendance.breakEndTime,
         totalHours: attendance.totalHours,
@@ -712,6 +811,8 @@ export const manualAttendance = async (req: Request, res: Response) => {
       date,
       checkInTime,
       checkOutTime,
+      checkInPhoto,
+      checkOutPhoto,
       breakStartTime,
       breakEndTime,
       status,
@@ -758,6 +859,8 @@ export const manualAttendance = async (req: Request, res: Response) => {
           employeeName,
           checkInTime,
           checkOutTime,
+          checkInPhoto,
+          checkOutPhoto,
           breakStartTime,
           breakEndTime,
           status,
@@ -780,6 +883,8 @@ export const manualAttendance = async (req: Request, res: Response) => {
         date: formattedDate,
         checkInTime,
         checkOutTime,
+        checkInPhoto,
+        checkOutPhoto,
         breakStartTime,
         breakEndTime,
         status: status || 'present',
@@ -804,6 +909,153 @@ export const manualAttendance = async (req: Request, res: Response) => {
       success: false,
       message: 'Error recording attendance',
       error: error.message,
+    });
+  }
+};
+
+// Update attendance status (for supervisors)
+export const updateAttendanceStatus = async (req: Request, res: Response) => {
+  try {
+    const { 
+      employeeId, 
+      attendanceId, 
+      date, 
+      status, 
+      remarks, 
+      supervisorId,
+      employeeName 
+    } = req.body;
+
+    console.log('📝 Updating attendance status:', {
+      employeeId,
+      attendanceId,
+      date,
+      status,
+      remarks,
+      supervisorId,
+      employeeName
+    });
+
+    // Validate required fields
+    if (!employeeId || !date || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: employeeId, date, and status are required'
+      });
+    }
+
+    // Validate status
+    const validStatuses = ['present', 'absent', 'half-day', 'leave', 'weekly-off'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be one of: present, absent, half-day, leave, weekly-off'
+      });
+    }
+
+    // Parse and validate date
+    const attendanceDate = new Date(date);
+    if (isNaN(attendanceDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format'
+      });
+    }
+
+    const formattedDate = formatDate(attendanceDate);
+
+    // Check if attendance record exists
+    let attendanceRecord;
+    
+    if (attendanceId && mongoose.Types.ObjectId.isValid(attendanceId)) {
+      // Update existing record by ID
+      attendanceRecord = await Attendance.findById(attendanceId);
+      
+      if (!attendanceRecord) {
+        return res.status(404).json({
+          success: false,
+          message: 'Attendance record not found'
+        });
+      }
+      
+      // Update the record
+      attendanceRecord.status = status as any;
+      if (remarks !== undefined) attendanceRecord.remarks = remarks;
+      if (supervisorId) attendanceRecord.supervisorId = supervisorId;
+      
+      await attendanceRecord.save();
+      
+    } else {
+      // Check if record exists for this employee and date
+      attendanceRecord = await Attendance.findOne({
+        employeeId,
+        date: formattedDate
+      });
+      
+      if (attendanceRecord) {
+        // Update existing record
+        attendanceRecord.status = status as any;
+        if (remarks !== undefined) attendanceRecord.remarks = remarks;
+        if (supervisorId) attendanceRecord.supervisorId = supervisorId;
+        
+        await attendanceRecord.save();
+      } else {
+        // Try to get employee name if not provided
+        let finalEmployeeName = employeeName;
+        let employeeDepartment = 'General';
+        let employeeSiteName = null;
+        
+        if (!finalEmployeeName) {
+          const employee = await Employee.findById(employeeId);
+          finalEmployeeName = employee?.name || 'Unknown Employee';
+          employeeDepartment = employee?.department || 'General';
+          employeeSiteName = employee?.siteName || null;
+        }
+
+        // Create new attendance record
+        const newAttendance = new Attendance({
+          employeeId,
+          employeeName: finalEmployeeName,
+          date: formattedDate,
+          status,
+          remarks: remarks || '',
+          supervisorId: supervisorId || null,
+          isCheckedIn: false,
+          isOnBreak: false,
+          checkInTime: null,
+          checkOutTime: null,
+          checkInPhoto: null,
+          checkOutPhoto: null,
+          breakStartTime: null,
+          breakEndTime: null,
+          totalHours: 0,
+          breakTime: 0,
+          department: employeeDepartment,
+          siteName: employeeSiteName
+        });
+        
+        attendanceRecord = await newAttendance.save();
+      }
+    }
+
+    console.log('✅ Attendance status updated successfully:', {
+      id: attendanceRecord._id,
+      employeeId: attendanceRecord.employeeId,
+      status: attendanceRecord.status,
+      date: attendanceRecord.date
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Attendance status updated to ${status} successfully`,
+      data: attendanceRecord
+    });
+
+  } catch (error: any) {
+    console.error('❌ Error updating attendance status:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error while updating attendance status'
     });
   }
 };

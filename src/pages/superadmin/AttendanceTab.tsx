@@ -45,12 +45,15 @@ import {
   Percent,
   FileText,
   Shield,
-  ShieldCheck
+  ShieldCheck,
+  Camera,
+  ExternalLink
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { siteService, Site } from "@/services/SiteService";
 import axios from "axios";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
 // API URL
 const API_URL = process.env.NODE_ENV === 'development' 
@@ -97,7 +100,7 @@ const departmentViewData = [
   },
 ];
 
-// Employee data structure
+// Employee data structure with photo fields
 interface Employee {
   id: string;
   _id?: string;
@@ -108,6 +111,8 @@ interface Employee {
   status: 'present' | 'absent' | 'leave' | 'weekly-off';
   checkInTime?: string;
   checkOutTime?: string;
+  checkInPhoto?: string;
+  checkOutPhoto?: string;
   site: string;
   siteName?: string;
   date: string;
@@ -132,7 +137,7 @@ interface Employee {
   isSupervisor?: boolean;
 }
 
-// Attendance Record structure
+// Attendance Record structure with photo fields
 interface AttendanceRecord {
   _id: string;
   employeeId: string;
@@ -140,6 +145,8 @@ interface AttendanceRecord {
   date: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;
+  checkOutPhoto: string | null;
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -178,7 +185,7 @@ const calculateDaysBetween = (startDate: string, endDate: string): number => {
   const end = new Date(endDate);
   const timeDiff = end.getTime() - start.getTime();
   const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-  return daysDiff + 1; // Inclusive of both start and end dates
+  return daysDiff + 1;
 };
 
 // Helper function to format date
@@ -198,17 +205,6 @@ const formatDateDisplay = (dateString: string) => {
     month: 'short',
     day: 'numeric'
   });
-};
-
-// Helper function to check if employee is manager or supervisor
-const isManagerOrSupervisor = (employee: Employee): boolean => {
-  const position = employee.position?.toLowerCase() || '';
-  const department = employee.department?.toLowerCase() || '';
-  
-  return position.includes('manager') || 
-         position.includes('supervisor') || 
-         department.includes('manager') || 
-         department.includes('supervisor');
 };
 
 // Helper function to format time
@@ -245,6 +241,17 @@ const formatTimeForDisplay = (timestamp: string | null): string => {
     console.error('Error formatting time:', timestamp, error);
     return timestamp || "-";
   }
+};
+
+// Helper function to check if employee is manager or supervisor
+const isManagerOrSupervisor = (employee: Employee): boolean => {
+  const position = employee.position?.toLowerCase() || '';
+  const department = employee.department?.toLowerCase() || '';
+  
+  return position.includes('manager') || 
+         position.includes('supervisor') || 
+         department.includes('manager') || 
+         department.includes('supervisor');
 };
 
 // Fetch employees from API
@@ -329,12 +336,11 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
     
     // First, try to fetch all attendance records (might be paginated)
     try {
-      // Try to get all attendance records first (some APIs support this)
       const response = await axios.get(`${API_URL}/attendance`, {
         params: { 
           startDate: start, 
           endDate: end,
-          limit: 1000 // Get as many as possible
+          limit: 1000
         }
       });
       
@@ -364,6 +370,8 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
           date: record.date || '',
           checkInTime: record.checkInTime || null,
           checkOutTime: record.checkOutTime || null,
+          checkInPhoto: record.checkInPhoto || null,
+          checkOutPhoto: record.checkOutPhoto || null,
           breakStartTime: record.breakStartTime || null,
           breakEndTime: record.breakEndTime || null,
           totalHours: Number(record.totalHours) || 0,
@@ -414,6 +422,8 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
           date: record.date || '',
           checkInTime: record.checkInTime || null,
           checkOutTime: record.checkOutTime || null,
+          checkInPhoto: record.checkInPhoto || null,
+          checkOutPhoto: record.checkOutPhoto || null,
           breakStartTime: record.breakStartTime || null,
           breakEndTime: record.breakEndTime || null,
           totalHours: Number(record.totalHours) || 0,
@@ -436,7 +446,6 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
       }
     } catch (rangeError: any) {
       console.log('Range endpoint failed:', rangeError.message);
-      // Don't log full error, just the message
     }
     
     // Fallback: fetch day by day
@@ -445,7 +454,6 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
     const startDateObj = new Date(start);
     const endDateObj = new Date(end);
     
-    // Calculate total days for progress tracking
     const totalDays = calculateDaysBetween(start, end);
     let daysProcessed = 0;
     
@@ -474,6 +482,8 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
             date: record.date || dateStr,
             checkInTime: record.checkInTime || null,
             checkOutTime: record.checkOutTime || null,
+            checkInPhoto: record.checkInPhoto || null,
+            checkOutPhoto: record.checkOutPhoto || null,
             breakStartTime: record.breakStartTime || null,
             breakEndTime: record.breakEndTime || null,
             totalHours: Number(record.totalHours) || 0,
@@ -500,10 +510,8 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
         }
       } catch (dayError: any) {
         console.log(`No attendance data for ${dateStr}: ${dayError.message}`);
-        // Continue to next day even if this one fails
       }
       
-      // Small delay to avoid overwhelming the server
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
@@ -512,12 +520,11 @@ const fetchAttendanceRecords = async (start: string, end: string): Promise<Atten
     
   } catch (error: any) {
     console.error('Error fetching attendance records:', error);
-    // Return empty array instead of throwing to prevent cascading failures
     return [];
   }
 };
 
-// Generate employee data for sites - MODIFIED TO USE REAL DATA WITH DATE RANGE
+// Generate employee data for sites - WITH PHOTO SUPPORT
 const generateEmployeeData = async (siteName: string, startDate: string, endDate: string): Promise<Employee[]> => {
   try {
     const employees: Employee[] = [];
@@ -565,22 +572,22 @@ const generateEmployeeData = async (siteName: string, startDate: string, endDate
         let status: 'present' | 'absent' | 'leave' | 'weekly-off' = 'absent';
         let checkInTime = '';
         let checkOutTime = '';
+        let checkInPhoto = '';
+        let checkOutPhoto = '';
         let remark = '';
         
         if (attendance) {
+          // Use the exact status from attendance record
           status = attendance.status as any;
           checkInTime = attendance.checkInTime ? formatTimeForDisplay(attendance.checkInTime) : '';
           checkOutTime = attendance.checkOutTime ? formatTimeForDisplay(attendance.checkOutTime) : '';
+          checkInPhoto = attendance.checkInPhoto || '';
+          checkOutPhoto = attendance.checkOutPhoto || '';
           remark = attendance.remarks || '';
         } else {
-          // If no attendance record, check if it's a weekend for demo purposes
-          const dayOfWeek = date.getDay();
-          if (dayOfWeek === 0 || dayOfWeek === 6) {
-            // Weekend - could be weekly off
-            status = Math.random() > 0.5 ? 'weekly-off' : 'absent';
-          } else {
-            status = 'absent';
-          }
+          // If no attendance record, mark as absent (not weekly off)
+          // This is the key fix: only mark as weekly-off if explicitly set in attendance
+          status = 'absent';
         }
         
         employees.push({
@@ -595,6 +602,8 @@ const generateEmployeeData = async (siteName: string, startDate: string, endDate
           status: status,
           checkInTime: checkInTime,
           checkOutTime: checkOutTime,
+          checkInPhoto: checkInPhoto,
+          checkOutPhoto: checkOutPhoto,
           site: siteName,
           siteName: siteName,
           date: currentDate,
@@ -619,12 +628,6 @@ const generateEmployeeData = async (siteName: string, startDate: string, endDate
       }
     }
     
-    // If no attendance records found and we have employees, use default status
-    if (employees.length > 0 && attendanceRecords.length === 0) {
-      console.log(`No attendance records found for ${siteName}, marking all as absent by default`);
-      // All employees are already marked as absent from the logic above
-    }
-    
     // If no real employees found, generate demo data as fallback
     if (employees.length === 0) {
       console.log('No real employees found, generating demo data for', siteName);
@@ -635,12 +638,11 @@ const generateEmployeeData = async (siteName: string, startDate: string, endDate
     return employees;
   } catch (error) {
     console.error('Error generating employee data:', error);
-    // Fallback to demo data if real data fails
     return generateDemoEmployeeData(siteName, startDate, endDate);
   }
 };
 
-// Generate demo employee data (fallback) - MODIFIED TO USE DATE RANGE
+// Generate demo employee data with mock photos
 const generateDemoEmployeeData = (siteName: string, startDate: string, endDate: string): Employee[] => {
   const employees: Employee[] = [];
   const departments = ['Housekeeping', 'Security', 'Parking', 'Waste Management', 'Consumables', 'Other'];
@@ -686,13 +688,14 @@ const generateDemoEmployeeData = (siteName: string, startDate: string, endDate: 
   // For each date, create attendance records
   for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
     const currentDate = formatDate(date);
-    const isWeekend = date.getDay() === 0 || date.getDay() === 6; // Saturday or Sunday
+    const isWeekend = date.getDay() === 0 || date.getDay() === 6;
     
     baseEmployees.forEach((baseEmp, index) => {
-      // Random status with some logic
       let status: 'present' | 'absent' | 'leave' | 'weekly-off';
       
-      if (isWeekend && Math.random() > 0.7) {
+      // Only set weekly-off on weekends and based on probability
+      // This ensures weekly-off is explicitly set, not default
+      if (isWeekend && Math.random() > 0.8) {
         status = 'weekly-off';
       } else {
         const rand = Math.random();
@@ -708,6 +711,11 @@ const generateDemoEmployeeData = (siteName: string, startDate: string, endDate: 
       const hasRemark = Math.random() > 0.5;
       const hasAction = Math.random() > 0.7;
       
+      // Mock photo URLs for demo
+      const mockPhotoUrl = status === 'present' 
+        ? `https://picsum.photos/id/${Math.floor(Math.random() * 100)}/200/200`
+        : '';
+      
       employees.push({
         id: `${baseEmp.id}_${currentDate}`,
         employeeId: baseEmp.id,
@@ -719,6 +727,8 @@ const generateDemoEmployeeData = (siteName: string, startDate: string, endDate: 
         status: status,
         checkInTime: status === 'present' ? '09:00 AM' : '',
         checkOutTime: status === 'present' ? '06:00 PM' : '',
+        checkInPhoto: status === 'present' ? mockPhotoUrl : '',
+        checkOutPhoto: status === 'present' ? mockPhotoUrl : '',
         site: siteName,
         siteName: siteName,
         date: currentDate,
@@ -743,7 +753,6 @@ const calculateSiteDeploymentStats = (site: Site, employees: Employee[]): SiteDe
   const managerRequirement = site.managerCount || 0;
   const supervisorRequirement = site.supervisorCount || 0;
   
-  // Calculate staff requirement from staffDeployment (excluding managers and supervisors)
   const staffRequirement = Array.isArray(site.staffDeployment) 
     ? site.staffDeployment.reduce((total, item) => {
         const role = item.role?.toLowerCase() || '';
@@ -754,23 +763,27 @@ const calculateSiteDeploymentStats = (site: Site, employees: Employee[]): SiteDe
       }, 0)
     : 0;
   
-  // Count current employees by role
   let managerCount = 0;
   let supervisorCount = 0;
   let staffCount = 0;
   
+  // Count unique employees (not per day)
+  const uniqueEmployeeIds = new Set<string>();
   employees.forEach(emp => {
-    if (emp.isManager) {
-      managerCount++;
-    } else if (emp.isSupervisor) {
-      supervisorCount++;
-    } else {
-      staffCount++;
+    if (!uniqueEmployeeIds.has(emp.employeeId || emp.id)) {
+      uniqueEmployeeIds.add(emp.employeeId || emp.id);
+      if (emp.isManager) {
+        managerCount++;
+      } else if (emp.isSupervisor) {
+        supervisorCount++;
+      } else {
+        staffCount++;
+      }
     }
   });
   
   const totalStaff = managerCount + supervisorCount + staffCount;
-  const dailyStaffRequirement = staffRequirement; // Daily staff requirement (excluding managers/supervisors)
+  const dailyStaffRequirement = staffRequirement;
   const remainingStaff = Math.max(0, staffRequirement - staffCount);
   const isStaffFull = staffCount >= staffRequirement;
   
@@ -789,40 +802,30 @@ const calculateSiteDeploymentStats = (site: Site, employees: Employee[]): SiteDe
   };
 };
 
-// Calculate attendance data for a site for a given period - MODIFIED TO SHOW CUMULATIVE TOTALS WITH DAILY REQUIREMENT MULTIPLIED BY DAYS
+// Calculate attendance data for a site for a given period
 const calculateSiteAttendanceData = async (site: Site, startDate: string, endDate: string) => {
   const daysInPeriod = calculateDaysBetween(startDate, endDate);
   const isSingleDay = daysInPeriod === 1;
   
-  // Fetch real employee data for the entire date range
   let employees: Employee[] = [];
   try {
     employees = await generateEmployeeData(site.name, startDate, endDate);
   } catch (error) {
     console.error('Error fetching employee data:', error);
-    // Fallback to generated data
     employees = generateDemoEmployeeData(site.name, startDate, endDate);
   }
   
-  // Calculate deployment stats
   const deploymentStats = calculateSiteDeploymentStats(site, employees);
-  
-  // Daily staff requirement (excluding managers and supervisors)
   const dailyRequirement = deploymentStats.dailyStaffRequirement;
-  
-  // Calculate total required for the period (daily requirement × number of days)
   const totalRequiredForPeriod = dailyRequirement * daysInPeriod;
   
-  // Calculate cumulative statistics for the entire period
   let totalPresentCount = 0;
   let totalAbsentCount = 0;
   let totalWeeklyOffCount = 0;
   let totalLeaveCount = 0;
   
-  // Track daily counts for staff only (excluding managers/supervisors)
   const dailyStats: { [date: string]: { present: number; absent: number; weeklyOff: number; leave: number; total: number } } = {};
   
-  // Initialize daily stats for each date in the range
   const start = new Date(startDate);
   const end = new Date(endDate);
   for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
@@ -830,9 +833,9 @@ const calculateSiteAttendanceData = async (site: Site, startDate: string, endDat
     dailyStats[dateStr] = { present: 0, absent: 0, weeklyOff: 0, leave: 0, total: 0 };
   }
   
-  // Count employees by status for each date - ONLY COUNT STAFF (not managers/supervisors)
+  // Count attendance per date, excluding managers and supervisors
   employees.forEach(emp => {
-    // Skip managers and supervisors for staff requirement calculations
+    // Skip managers and supervisors for staff counts
     if (emp.isManager || emp.isSupervisor) return;
     
     const date = emp.date;
@@ -842,6 +845,7 @@ const calculateSiteAttendanceData = async (site: Site, startDate: string, endDat
     
     dailyStats[date].total++;
     
+    // CRITICAL FIX: Only count as weekly-off if status is explicitly 'weekly-off'
     if (emp.status === 'present') {
       totalPresentCount++;
       dailyStats[date].present++;
@@ -854,82 +858,65 @@ const calculateSiteAttendanceData = async (site: Site, startDate: string, endDat
     } else if (emp.status === 'leave') {
       totalLeaveCount++;
       dailyStats[date].leave++;
+    } else {
+      // Any other status (like undefined) counts as absent
+      totalAbsentCount++;
+      dailyStats[date].absent++;
     }
   });
   
-  // Calculate cumulative totals for the period
   const totalRequiredAttendance = totalRequiredForPeriod;
-  const totalPresentAttendance = totalPresentCount; // Present only (excluding weekly off for this calculation)
-  const totalPresentWithWeeklyOff = totalPresentCount + totalWeeklyOffCount; // Present including weekly off
-  const totalAbsentAttendance = totalAbsentCount + totalLeaveCount;
-  const periodShortage = totalAbsentAttendance;
+  const totalPresentAttendance = totalPresentCount; // Only actual present counts, not including weekly-off
+  const periodShortage = totalAbsentCount + totalLeaveCount;
   
-  // For single day view
   const singleDayPresent = Object.values(dailyStats)[0]?.present || 0;
   const singleDayWeeklyOff = Object.values(dailyStats)[0]?.weeklyOff || 0;
   const singleDayLeave = Object.values(dailyStats)[0]?.leave || 0;
   const singleDayAbsent = Object.values(dailyStats)[0]?.absent || 0;
-  const singleDayTotalPresent = singleDayPresent + singleDayWeeklyOff;
-  const singleDayOnSiteRequirement = dailyRequirement - singleDayWeeklyOff;
+  const singleDayTotalPresent = singleDayPresent; // Only actual present for daily view
+  const singleDayOnSiteRequirement = dailyRequirement; // Weekly off doesn't reduce requirement for daily
   
   return {
     id: `${site._id}-${startDate}-${endDate}`,
     siteId: `${site._id}-${startDate}-${endDate}`,
     name: site.name,
     siteName: site.name,
-    dailyRequirement, // Daily staff requirement (excluding managers/supervisors)
+    dailyRequirement,
     totalEmployees: dailyRequirement,
-    
-    // Deployment stats
     deploymentStats,
-    
-    // CUMULATIVE TOTALS FOR THE PERIOD
-    totalRequiredForPeriod, // Daily requirement × number of days
-    totalPresent: totalPresentCount, // Cumulative present count for the period
-    totalWeeklyOff: totalWeeklyOffCount, // Cumulative weekly off count for the period
-    totalLeave: totalLeaveCount, // Cumulative leave count for the period
-    totalAbsent: totalAbsentCount, // Cumulative absent count for the period
-    
-    // For backward compatibility
-    present: totalPresentCount + totalWeeklyOffCount, // Total present including weekly off
+    totalRequiredForPeriod,
+    totalPresent: totalPresentCount,
+    totalWeeklyOff: totalWeeklyOffCount,
+    totalLeave: totalLeaveCount,
+    totalAbsent: totalAbsentCount,
+    present: totalPresentCount,
     weeklyOff: totalWeeklyOffCount,
     leave: totalLeaveCount,
-    absent: totalAbsentCount + totalLeaveCount, // Total absent including leave
+    absent: totalAbsentCount,
     shortage: periodShortage,
-    
     date: `${startDate} to ${endDate}`,
     daysInPeriod,
     totalRequiredAttendance,
-    totalPresentAttendance: totalPresentWithWeeklyOff,
+    totalPresentAttendance,
     periodShortage,
     startDate,
     endDate,
-    
-    // Detailed counts
     presentCount: totalPresentCount,
     absentCount: totalAbsentCount,
     weeklyOffCount: totalWeeklyOffCount,
     leaveCount: totalLeaveCount,
-    
-    // Duration totals (cumulative)
     durationTotalRequired: totalRequiredForPeriod,
     durationWeeklyOff: totalWeeklyOffCount,
     durationOnSiteRequirement: totalRequiredForPeriod - totalWeeklyOffCount,
     durationPresent: totalPresentCount,
     durationAbsent: totalAbsentCount + totalLeaveCount,
-    
-    // Daily averages (for reference only)
     avgDailyPresent: Math.round(totalPresentCount / daysInPeriod),
     avgDailyAbsent: Math.round((totalAbsentCount + totalLeaveCount) / daysInPeriod),
     avgDailyWeeklyOff: Math.round(totalWeeklyOffCount / daysInPeriod),
     avgDailyLeave: Math.round(totalLeaveCount / daysInPeriod),
     avgDailyTotalRequired: dailyRequirement,
-    avgDailyOnSiteRequirement: dailyRequirement - Math.round(totalWeeklyOffCount / daysInPeriod),
-    
-    // Daily stats
+    avgDailyOnSiteRequirement: dailyRequirement,
     dailyStats,
-    
-    // Single day specific fields
     singleDayPresent,
     singleDayWeeklyOff,
     singleDayLeave,
@@ -937,42 +924,34 @@ const calculateSiteAttendanceData = async (site: Site, startDate: string, endDat
     singleDayTotalPresent,
     singleDayShortage: singleDayAbsent + singleDayLeave,
     singleDayOnSiteRequirement,
-    
-    // Employee data - ensure it's always an array
     employees: employees || [],
-    
-    // Original site data
     originalSite: site,
-    
-    // Real data flag
     isRealData: employees.length > 0 && employees[0]?.employeeId?.startsWith?.('DEMO') === false
   };
 };
 
-// Calculate department site data - MODIFIED TO SHOW CUMULATIVE TOTALS
+// Calculate department site data
 const calculateDepartmentSiteData = async (site: Site, startDate: string, endDate: string, department: string) => {
   const siteData = await calculateSiteAttendanceData(site, startDate, endDate);
   
-  // Filter employees by department
   const departmentEmployees = (siteData.employees || []).filter(emp => emp.department === department);
   
-  // Calculate department-specific cumulative statistics (only counting staff)
   let departmentPresent = 0;
   let departmentAbsent = 0;
   let departmentWeeklyOff = 0;
   let departmentLeave = 0;
   
   departmentEmployees.forEach(emp => {
-    // Skip managers and supervisors for staff calculations
     if (emp.isManager || emp.isSupervisor) return;
     
     if (emp.status === 'present') departmentPresent++;
     else if (emp.status === 'absent') departmentAbsent++;
     else if (emp.status === 'weekly-off') departmentWeeklyOff++;
     else if (emp.status === 'leave') departmentLeave++;
+    else departmentAbsent++;
   });
   
-  const departmentDailyRequirement = Math.round(departmentEmployees.filter(emp => !emp.isManager && !emp.isSupervisor).length / siteData.daysInPeriod); // Average employees per day
+  const departmentDailyRequirement = Math.round(departmentEmployees.filter(emp => !emp.isManager && !emp.isSupervisor).length / siteData.daysInPeriod);
   const departmentTotalRequired = departmentDailyRequirement * siteData.daysInPeriod;
   
   return {
@@ -981,21 +960,15 @@ const calculateDepartmentSiteData = async (site: Site, startDate: string, endDat
     dailyRequirement: departmentDailyRequirement,
     totalEmployees: departmentDailyRequirement,
     totalRequiredForPeriod: departmentTotalRequired,
-    
-    // Cumulative totals for department
     totalPresent: departmentPresent,
     totalWeeklyOff: departmentWeeklyOff,
     totalLeave: departmentLeave,
     totalAbsent: departmentAbsent,
-    
-    present: departmentPresent + departmentWeeklyOff,
+    present: departmentPresent,
     weeklyOff: departmentWeeklyOff,
     leave: departmentLeave,
-    absent: departmentAbsent + departmentLeave,
-    
+    absent: departmentAbsent,
     employees: departmentEmployees,
-    
-    // Override duration totals for department
     durationTotalRequired: departmentTotalRequired,
     durationWeeklyOff: departmentWeeklyOff,
     durationOnSiteRequirement: departmentTotalRequired - departmentWeeklyOff,
@@ -1004,10 +977,9 @@ const calculateDepartmentSiteData = async (site: Site, startDate: string, endDat
   };
 };
 
-// Get available departments - UNCHANGED
 const departments = departmentViewData.map(dept => dept.department);
 
-// Site Employee Details Page Component - MODIFIED TO HANDLE DATE RANGE PROPERLY
+// Site Employee Details Page Component with Photo Viewing
 interface SiteEmployeeDetailsProps {
   siteData: any;
   onBack: () => void;
@@ -1015,7 +987,6 @@ interface SiteEmployeeDetailsProps {
 }
 
 const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onBack, viewType }) => {
-  // Add null check immediately
   if (!siteData) {
     return (
       <div className="min-h-screen bg-background p-6">
@@ -1040,8 +1011,10 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [dailyView, setDailyView] = useState<boolean>(siteData.daysInPeriod === 1);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [selectedPhotoType, setSelectedPhotoType] = useState<'checkin' | 'checkout'>('checkin');
   
-  // Get unique dates from employees
   const availableDates = useMemo(() => {
     const dates = new Set<string>();
     employees.forEach(emp => {
@@ -1050,7 +1023,6 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     return Array.from(dates).sort();
   }, [employees]);
   
-  // Update employees when siteData changes
   useEffect(() => {
     if (siteData?.employees) {
       setEmployees(siteData.employees || []);
@@ -1063,7 +1035,16 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     }
   }, [siteData?.employees, siteData?.daysInPeriod, siteData?.startDate]);
   
-  // Filter employees by selected date when in daily view
+  const handleViewPhoto = (photoUrl: string | null | undefined, type: 'checkin' | 'checkout') => {
+    if (photoUrl) {
+      setSelectedPhoto(photoUrl);
+      setSelectedPhotoType(type);
+      setPhotoModalOpen(true);
+    } else {
+      toast.error('No photo available for this attendance record');
+    }
+  };
+  
   const filteredEmployeesByDate = useMemo(() => {
     if (dailyView && selectedDate) {
       return employees.filter(emp => emp.date === selectedDate);
@@ -1079,26 +1060,26 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
   const managersAndSupervisors = allEmployees.filter((emp: Employee) => emp.isManager || emp.isSupervisor);
 
   const filteredEmployees = useMemo(() => {
-    let employees = [];
+    let employeesList = [];
     switch (activeTab) {
       case 'present':
-        employees = presentEmployees;
+        employeesList = presentEmployees;
         break;
       case 'absent':
-        employees = absentEmployees;
+        employeesList = absentEmployees;
         break;
       case 'weekly-off':
-        employees = weeklyOffEmployees;
+        employeesList = weeklyOffEmployees;
         break;
       case 'leave':
-        employees = leaveEmployees;
+        employeesList = leaveEmployees;
         break;
       default:
-        employees = allEmployees;
+        employeesList = allEmployees;
     }
 
     if (employeeSearch) {
-      employees = employees.filter((emp: Employee) =>
+      employeesList = employeesList.filter((emp: Employee) =>
         emp.name.toLowerCase().includes(employeeSearch.toLowerCase()) ||
         (emp.employeeId && emp.employeeId.toLowerCase().includes(employeeSearch.toLowerCase())) ||
         emp.department.toLowerCase().includes(employeeSearch.toLowerCase()) ||
@@ -1106,7 +1087,7 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       );
     }
 
-    return employees;
+    return employeesList;
   }, [activeTab, employeeSearch, allEmployees, presentEmployees, absentEmployees, weeklyOffEmployees, leaveEmployees]);
 
   const itemsPerPage = 20;
@@ -1117,7 +1098,6 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
 
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
 
-  // Refresh employee data
   const refreshEmployeeData = async () => {
     try {
       setRefreshing(true);
@@ -1139,7 +1119,6 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     }
   };
 
-  // Update employee action
   const updateEmployeeAction = (employeeId: string, action: 'fine' | 'advance' | 'other' | '' | 'none') => {
     setEmployees(prevEmployees =>
       prevEmployees.map(emp =>
@@ -1151,7 +1130,6 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     );
   };
 
-  // Update employee remark
   const updateEmployeeRemark = (employeeId: string, remark: string) => {
     setEmployees(prevEmployees =>
       prevEmployees.map(emp =>
@@ -1160,7 +1138,6 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     );
   };
 
-  // Export detailed employee data
   const handleExportEmployeeDetails = () => {
     const headers = [
       'Employee ID',
@@ -1170,6 +1147,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       'Status',
       'Check In Time',
       'Check Out Time',
+      'Check In Photo URL',
+      'Check Out Photo URL',
       'Email',
       'Phone',
       'Employee Type',
@@ -1192,6 +1171,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
       emp.status === 'weekly-off' ? 'Weekly Off' : emp.status === 'leave' ? 'Leave' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
       emp.checkInTime || '-',
       emp.checkOutTime || '-',
+      emp.checkInPhoto || '-',
+      emp.checkOutPhoto || '-',
       emp.email || '-',
       emp.phone || '-',
       emp.employeeType || 'Full-time',
@@ -1225,9 +1206,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
     toast.success(`Employee details exported successfully`);
   };
 
-  // Handle export summary
   const handleExportEmployees = () => {
-    const headers = ['Employee ID', 'Name', 'Department', 'Position', 'Status', 'Check In', 'Check Out', 'Action', 'Remark', 'Site', 'Date', 'Role Type'];
+    const headers = ['Employee ID', 'Name', 'Department', 'Position', 'Status', 'Check In', 'Check Out', 'Has Check In Photo', 'Has Check Out Photo', 'Action', 'Remark', 'Site', 'Date', 'Role Type'];
     const csvContent = [
       headers.join(','),
       ...filteredEmployees.map((emp: Employee) => [
@@ -1238,6 +1218,8 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
         emp.status === 'weekly-off' ? 'Weekly Off' : emp.status === 'leave' ? 'Leave' : emp.status.charAt(0).toUpperCase() + emp.status.slice(1),
         emp.checkInTime || '-',
         emp.checkOutTime || '-',
+        emp.checkInPhoto ? 'Yes' : 'No',
+        emp.checkOutPhoto ? 'Yes' : 'No',
         emp.action === 'none' || !emp.action ? '-' : emp.action,
         `"${emp.remark || ''}"`,
         `"${emp.site}"`,
@@ -1261,777 +1243,848 @@ const SiteEmployeeDetails: React.FC<SiteEmployeeDetailsProps> = ({ siteData, onB
   };
 
   return (
-    <div className="min-h-screen bg-background p-4 sm:p-6">
-      {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="mb-6"
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-          <div className="flex items-center gap-4">
-            <Button variant="outline" size="sm" onClick={onBack}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Attendance
-            </Button>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {siteData.name || siteData.siteName} - Employee Details
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                {formatDateDisplay(siteData.startDate)} to {formatDateDisplay(siteData.endDate)} • {viewType === 'department' ? 'Department View' : 'Site View'}
-                {siteData.isRealData && (
-                  <span className="ml-2 text-green-600 font-medium">
-                    ✓ Real Data
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={refreshEmployeeData}
-              disabled={refreshing}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={handleExportEmployees}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export Summary
-            </Button>
-            <Button 
-              variant="default" 
-              size="sm"
-              onClick={handleExportEmployeeDetails}
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              Export Details
-            </Button>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Summary Cards - Showing Cumulative Totals */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6"
-      >
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-800">Daily Staff Requirement</p>
-                <p className="text-2xl font-bold text-blue-600">{siteData.dailyRequirement || 0}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Per day (excl. mgr/sup)
-                </p>
-              </div>
-              <div className="p-2 bg-blue-100 rounded-full">
-                <Users className="h-6 w-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-indigo-50 border-indigo-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-indigo-800">Total Required</p>
-                <p className="text-2xl font-bold text-indigo-600">
-                  {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  For {siteData.daysInPeriod} days
-                </p>
-              </div>
-              <div className="p-2 bg-indigo-100 rounded-full">
-                <Calendar className="h-6 w-6 text-indigo-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-green-50 border-green-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-green-800">Total Present</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {siteData.totalPresent || siteData.presentCount || 0}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Staff only
-                </p>
-              </div>
-              <div className="p-2 bg-green-100 rounded-full">
-                <UserCheck className="h-6 w-6 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-purple-50 border-purple-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-purple-800">Total Weekly Off</p>
-                <p className="text-2xl font-bold text-purple-600">
-                  {siteData.totalWeeklyOff || siteData.weeklyOffCount || 0}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Staff only
-                </p>
-              </div>
-              <div className="p-2 bg-purple-100 rounded-full">
-                <Calendar className="h-6 w-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-orange-50 border-orange-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-orange-800">Total Leave</p>
-                <p className="text-2xl font-bold text-orange-600">
-                  {siteData.totalLeave || siteData.leaveCount || 0}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Staff only
-                </p>
-              </div>
-              <div className="p-2 bg-orange-100 rounded-full">
-                <Clock className="h-6 w-6 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-red-800">Total Absent</p>
-                <p className="text-2xl font-bold text-red-600">
-                  {siteData.totalAbsent || siteData.absentCount || 0}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Staff only
-                </p>
-              </div>
-              <div className="p-2 bg-red-100 rounded-full">
-                <AlertCircle className="h-6 w-6 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      {/* Deployment Stats Cards */}
-      {siteData.deploymentStats && (
+    <>
+      <div className="min-h-screen bg-background p-4 sm:p-6">
+        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.12 }}
-          className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"
-        >
-          <Card className="bg-amber-50 border-amber-200">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-amber-800">Managers</p>
-                  <p className="text-2xl font-bold text-amber-600">
-                    {siteData.deploymentStats.managerCount} / {siteData.deploymentStats.managerRequirement}
-                  </p>
-                </div>
-                <div className="p-2 bg-amber-100 rounded-full">
-                  <Shield className="h-6 w-6 text-amber-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-teal-50 border-teal-200">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-teal-800">Supervisors</p>
-                  <p className="text-2xl font-bold text-teal-600">
-                    {siteData.deploymentStats.supervisorCount} / {siteData.deploymentStats.supervisorRequirement}
-                  </p>
-                </div>
-                <div className="p-2 bg-teal-100 rounded-full">
-                  <ShieldCheck className="h-6 w-6 text-teal-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-cyan-50 border-cyan-200">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-cyan-800">Staff</p>
-                  <p className="text-2xl font-bold text-cyan-600">
-                    {siteData.deploymentStats.staffCount} / {siteData.deploymentStats.staffRequirement}
-                  </p>
-                </div>
-                <div className="p-2 bg-cyan-100 rounded-full">
-                  <Users className="h-6 w-6 text-cyan-600" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className={`${siteData.deploymentStats.isStaffFull ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className={`text-sm font-medium ${siteData.deploymentStats.isStaffFull ? 'text-red-800' : 'text-green-800'}`}>
-                    Remaining Staff
-                  </p>
-                  <p className={`text-2xl font-bold ${siteData.deploymentStats.isStaffFull ? 'text-red-600' : 'text-green-600'}`}>
-                    {siteData.deploymentStats.remainingStaff}
-                  </p>
-                </div>
-                <div className={`p-2 rounded-full ${siteData.deploymentStats.isStaffFull ? 'bg-red-100' : 'bg-green-100'}`}>
-                  {siteData.deploymentStats.isStaffFull ? (
-                    <XCircle className={`h-6 w-6 text-red-600`} />
-                  ) : (
-                    <CheckCircle className={`h-6 w-6 text-green-600`} />
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      {/* Date Navigation for Multi-day View */}
-      {!dailyView && availableDates.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
           className="mb-6"
         >
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                <div className="flex items-center gap-2">
-                  <CalendarDays className="h-5 w-5 text-muted-foreground" />
-                  <span className="text-sm font-medium">View Daily Attendance:</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {availableDates.map(date => (
-                    <Button
-                      key={date}
-                      variant={selectedDate === date ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => {
-                        setSelectedDate(date);
-                        setDailyView(true);
-                        setCurrentPage(1);
-                      }}
-                    >
-                      {formatDateDisplay(date)}
-                    </Button>
-                  ))}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setDailyView(false);
-                    setCurrentPage(1);
-                  }}
-                >
-                  Show Cumulative View
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      {/* Daily View Indicator */}
-      {dailyView && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="mb-6"
-        >
-          <Card className="bg-blue-50 border-blue-200">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Calendar className="h-5 w-5 text-blue-600" />
-                  <div>
-                    <h3 className="font-medium text-blue-800">
-                      Viewing: {formatDateDisplay(selectedDate)}
-                    </h3>
-                    <p className="text-sm text-blue-700">
-                      Showing attendance data for this specific date
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setDailyView(false);
-                    setCurrentPage(1);
-                  }}
-                >
-                  <X className="h-4 w-4 mr-2" />
-                  Show Cumulative View
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      {/* Employee Data Source Info */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.25 }}
-        className="mb-6"
-      >
-        <Card className={siteData.isRealData ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"}>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+            <div className="flex items-center gap-4">
+              <Button variant="outline" size="sm" onClick={onBack}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Attendance
+              </Button>
               <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <Badge variant={siteData.isRealData ? "default" : "secondary"}>
-                    {siteData.isRealData ? "Real Employee Data" : "Demo Employee Data"}
-                  </Badge>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {siteData.name || siteData.siteName} - Employee Details
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  {formatDateDisplay(siteData.startDate)} to {formatDateDisplay(siteData.endDate)} • {viewType === 'department' ? 'Department View' : 'Site View'}
                   {siteData.isRealData && (
-                    <Badge variant="outline" className="bg-green-100 text-green-800 border-green-200">
-                      ✓ Connected to API
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-gray-700">
-                  {siteData.isRealData 
-                    ? `Loaded ${employees.length} employee records from ${siteData.startDate} to ${siteData.endDate}`
-                    : 'Showing demo employee data. Real data will be shown when API connection is available.'
-                  }
-                </p>
-                <p className="text-xs text-muted-foreground mt-2">
-                  {dailyView 
-                    ? `Showing ${allEmployees.length} employees for ${formatDateDisplay(selectedDate)}`
-                    : `Showing ${employees.length} total records across ${siteData.daysInPeriod} days (cumulative totals)`
-                  }
-                  {managersAndSupervisors.length > 0 && (
-                    <span className="ml-2 text-amber-600">
-                      • {managersAndSupervisors.length} managers/supervisors (excluded from staff counts)
+                    <span className="ml-2 text-green-600 font-medium">
+                      ✓ Real Data
                     </span>
                   )}
                 </p>
               </div>
-              <div className="flex flex-col gap-2">
-                <div className="text-right">
-                  <div className="text-sm font-medium">Data Source</div>
-                  <div className="text-xs text-muted-foreground">
-                    {siteData.isRealData ? 'Live Database' : 'Generated'}
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={refreshEmployeeData}
+                disabled={refreshing}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={handleExportEmployees}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Summary
+              </Button>
+              <Button 
+                variant="default" 
+                size="sm"
+                onClick={handleExportEmployeeDetails}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Export Details
+              </Button>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Summary Cards */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="grid grid-cols-1 md:grid-cols-6 gap-4 mb-6"
+        >
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-blue-800">Daily Staff Requirement</p>
+                  <p className="text-2xl font-bold text-blue-600">{siteData.dailyRequirement || 0}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Per day (excl. mgr/sup)
+                  </p>
+                </div>
+                <div className="p-2 bg-blue-100 rounded-full">
+                  <Users className="h-6 w-6 text-blue-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-indigo-50 border-indigo-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-indigo-800">Total Required</p>
+                  <p className="text-2xl font-bold text-indigo-600">
+                    {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    For {siteData.daysInPeriod} days
+                  </p>
+                </div>
+                <div className="p-2 bg-indigo-100 rounded-full">
+                  <Calendar className="h-6 w-6 text-indigo-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-green-50 border-green-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-800">Total Present</p>
+                  <p className="text-2xl font-bold text-green-600">
+                    {siteData.totalPresent || siteData.presentCount || 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Staff only
+                  </p>
+                </div>
+                <div className="p-2 bg-green-100 rounded-full">
+                  <UserCheck className="h-6 w-6 text-green-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-purple-50 border-purple-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-purple-800">Total Weekly Off</p>
+                  <p className="text-2xl font-bold text-purple-600">
+                    {siteData.totalWeeklyOff || siteData.weeklyOffCount || 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Staff only (explicit weekly-off)
+                  </p>
+                </div>
+                <div className="p-2 bg-purple-100 rounded-full">
+                  <Calendar className="h-6 w-6 text-purple-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-orange-50 border-orange-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-orange-800">Total Leave</p>
+                  <p className="text-2xl font-bold text-orange-600">
+                    {siteData.totalLeave || siteData.leaveCount || 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Staff only
+                  </p>
+                </div>
+                <div className="p-2 bg-orange-100 rounded-full">
+                  <Clock className="h-6 w-6 text-orange-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-red-50 border-red-200">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-red-800">Total Absent</p>
+                  <p className="text-2xl font-bold text-red-600">
+                    {siteData.totalAbsent || siteData.absentCount || 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Staff only (no attendance record)
+                  </p>
+                </div>
+                <div className="p-2 bg-red-100 rounded-full">
+                  <AlertCircle className="h-6 w-6 text-red-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Deployment Stats Cards */}
+        {siteData.deploymentStats && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.12 }}
+            className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"
+          >
+            <Card className="bg-amber-50 border-amber-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-amber-800">Managers</p>
+                    <p className="text-2xl font-bold text-amber-600">
+                      {siteData.deploymentStats.managerCount} / {siteData.deploymentStats.managerRequirement}
+                    </p>
+                  </div>
+                  <div className="p-2 bg-amber-100 rounded-full">
+                    <Shield className="h-6 w-6 text-amber-600" />
                   </div>
                 </div>
-                {!siteData.isRealData && (
-                  <Button 
-                    size="sm" 
-                    variant="outline"
-                    onClick={() => window.open(`${API_URL}/employees`, '_blank')}
+              </CardContent>
+            </Card>
+
+            <Card className="bg-teal-50 border-teal-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-teal-800">Supervisors</p>
+                    <p className="text-2xl font-bold text-teal-600">
+                      {siteData.deploymentStats.supervisorCount} / {siteData.deploymentStats.supervisorRequirement}
+                    </p>
+                  </div>
+                  <div className="p-2 bg-teal-100 rounded-full">
+                    <ShieldCheck className="h-6 w-6 text-teal-600" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-cyan-50 border-cyan-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-cyan-800">Staff</p>
+                    <p className="text-2xl font-bold text-cyan-600">
+                      {siteData.deploymentStats.staffCount} / {siteData.deploymentStats.staffRequirement}
+                    </p>
+                  </div>
+                  <div className="p-2 bg-cyan-100 rounded-full">
+                    <Users className="h-6 w-6 text-cyan-600" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className={`${siteData.deploymentStats.isStaffFull ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className={`text-sm font-medium ${siteData.deploymentStats.isStaffFull ? 'text-red-800' : 'text-green-800'}`}>
+                      Remaining Staff
+                    </p>
+                    <p className={`text-2xl font-bold ${siteData.deploymentStats.isStaffFull ? 'text-red-600' : 'text-green-600'}`}>
+                      {siteData.deploymentStats.remainingStaff}
+                    </p>
+                  </div>
+                  <div className={`p-2 rounded-full ${siteData.deploymentStats.isStaffFull ? 'bg-red-100' : 'bg-green-100'}`}>
+                    {siteData.deploymentStats.isStaffFull ? (
+                      <XCircle className={`h-6 w-6 text-red-600`} />
+                    ) : (
+                      <CheckCircle className={`h-6 w-6 text-green-600`} />
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Date Navigation */}
+        {!dailyView && availableDates.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="mb-6"
+          >
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <CalendarDays className="h-5 w-5 text-muted-foreground" />
+                    <span className="text-sm font-medium">View Daily Attendance:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {availableDates.map(date => (
+                      <Button
+                        key={date}
+                        variant={selectedDate === date ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => {
+                          setSelectedDate(date);
+                          setDailyView(true);
+                          setCurrentPage(1);
+                        }}
+                      >
+                        {formatDateDisplay(date)}
+                      </Button>
+                    ))}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setDailyView(false);
+                      setCurrentPage(1);
+                    }}
                   >
-                    Check API Status
+                    Show Cumulative View
                   </Button>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
-      {/* Period Calculation Info */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="mb-6"
-      >
-        <Card className="bg-gray-50">
-          <CardContent className="p-4">
-            <div className="text-sm">
-              <h3 className="font-semibold mb-2">Period Attendance Calculation ({siteData.daysInPeriod} days):</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
-                <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Required Attendance (Staff Only)</span>
-                  <div className="text-green-600 font-medium mt-1">
-                    = {siteData.dailyRequirement || 0} staff × {siteData.daysInPeriod} days
+        {/* Daily View Indicator */}
+        {dailyView && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="mb-6"
+          >
+            <Card className="bg-blue-50 border-blue-200">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Calendar className="h-5 w-5 text-blue-600" />
+                    <div>
+                      <h3 className="font-medium text-blue-800">
+                        Viewing: {formatDateDisplay(selectedDate)}
+                      </h3>
+                      <p className="text-sm text-blue-700">
+                        Showing attendance data for this specific date
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-green-600 font-medium mt-1">
-                    = {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setDailyView(false);
+                      setCurrentPage(1);
+                    }}
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Show Cumulative View
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Data Source Info */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="mb-6"
+        >
+          <Card className={siteData.isRealData ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant={siteData.isRealData ? "default" : "secondary"}>
+                      {siteData.isRealData ? "Real Employee Data" : "Demo Employee Data"}
+                    </Badge>
+                    {siteData.isRealData && (
+                      <Badge variant="outline" className="bg-green-100 text-green-800 border-green-200">
+                        ✓ Connected to API
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-700">
+                    {siteData.isRealData 
+                      ? `Loaded ${employees.length} employee records from ${siteData.startDate} to ${siteData.endDate}`
+                      : 'Showing demo employee data. Real data will be shown when API connection is available.'
+                    }
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {dailyView 
+                      ? `Showing ${allEmployees.length} employees for ${formatDateDisplay(selectedDate)}`
+                      : `Showing ${employees.length} total records across ${siteData.daysInPeriod} days (cumulative totals)`
+                    }
+                    {managersAndSupervisors.length > 0 && (
+                      <span className="ml-2 text-amber-600">
+                        • {managersAndSupervisors.length} managers/supervisors (excluded from staff counts)
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="text-right">
+                    <div className="text-sm font-medium">Data Source</div>
+                    <div className="text-xs text-muted-foreground">
+                      {siteData.isRealData ? 'Live Database' : 'Generated'}
+                    </div>
+                  </div>
+                  {!siteData.isRealData && (
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => window.open(`${API_URL}/employees`, '_blank')}
+                    >
+                      Check API Status
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Period Calculation Info */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="mb-6"
+        >
+          <Card className="bg-gray-50">
+            <CardContent className="p-4">
+              <div className="text-sm">
+                <h3 className="font-semibold mb-2">Period Attendance Calculation ({siteData.daysInPeriod} days):</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                  <div className="bg-white p-2 rounded border">
+                    <span className="font-medium">Total Required Attendance (Staff Only)</span>
+                    <div className="text-green-600 font-medium mt-1">
+                      = {siteData.dailyRequirement || 0} staff × {siteData.daysInPeriod} days
+                    </div>
+                    <div className="text-green-600 font-medium mt-1">
+                      = {siteData.totalRequiredForPeriod || siteData.durationTotalRequired || 0}
+                    </div>
+                  </div>
+                  <div className="bg-white p-2 rounded border">
+                    <span className="font-medium">Total Present (Cumulative - Staff Only)</span>
+                    <div className="text-blue-600 font-medium mt-1">
+                      = {siteData.totalPresent || siteData.presentCount || 0} present
+                    </div>
+                    <div className="text-blue-600 font-medium mt-1">
+                      Across {siteData.daysInPeriod} days
+                    </div>
+                  </div>
+                  <div className="bg-white p-2 rounded border">
+                    <span className="font-medium">Total Shortage (Staff Only)</span>
+                    <div className="text-red-600 font-medium mt-1">
+                      = {(siteData.totalAbsent || 0) + (siteData.totalLeave || 0)} absent + leave
+                    </div>
+                    <div className="text-red-600 font-medium mt-1">
+                      = {siteData.periodShortage}
+                    </div>
                   </div>
                 </div>
-                <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Present (Cumulative - Staff Only)</span>
-                  <div className="text-blue-600 font-medium mt-1">
-                    = {siteData.totalPresent || siteData.presentCount || 0} present
-                  </div>
-                  <div className="text-blue-600 font-medium mt-1">
-                    Across {siteData.daysInPeriod} days
-                  </div>
+                <p className="mt-2 text-muted-foreground">
+                  <strong>Note:</strong> Weekly Off is only counted when explicitly marked as 'weekly-off' in attendance. 
+                  Employees with no attendance record are counted as Absent, not Weekly Off.
+                  All calculations above exclude managers and supervisors. Only staff positions count toward the requirement.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Filters and Tabs */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="mb-6"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                <div className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg">
+                  <Button
+                    variant={activeTab === 'all' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('all');
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs"
+                  >
+                    All Employees ({allEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'present' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('present');
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs"
+                  >
+                    Present ({presentEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'weekly-off' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('weekly-off');
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs"
+                  >
+                    Weekly Off ({weeklyOffEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'leave' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('leave');
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs"
+                  >
+                    Leave ({leaveEmployees.length})
+                  </Button>
+                  <Button
+                    variant={activeTab === 'absent' ? 'default' : 'ghost'}
+                    size="sm"
+                    onClick={() => {
+                      setActiveTab('absent');
+                      setCurrentPage(1);
+                    }}
+                    className="text-xs"
+                  >
+                    Absent ({absentEmployees.length})
+                  </Button>
                 </div>
-                <div className="bg-white p-2 rounded border">
-                  <span className="font-medium">Total Shortage (Staff Only)</span>
-                  <div className="text-red-600 font-medium mt-1">
-                    = {(siteData.totalAbsent || 0) + (siteData.totalLeave || 0)} absent + leave
-                  </div>
-                  <div className="text-red-600 font-medium mt-1">
-                    = {siteData.periodShortage}
-                  </div>
+
+                <div className="flex items-center gap-2 w-full lg:w-auto">
+                  <Search className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search employees..."
+                    value={employeeSearch}
+                    onChange={(e) => {
+                      setEmployeeSearch(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="w-full lg:w-64"
+                  />
                 </div>
               </div>
-              <p className="mt-2 text-muted-foreground">
-                <strong>Note:</strong> All calculations above exclude managers and supervisors. Only staff positions count toward the requirement.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+            </CardContent>
+          </Card>
+        </motion.div>
 
-      {/* Filters and Tabs */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.35 }}
-        className="mb-6"
-      >
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-              {/* Tabs */}
-              <div className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg">
-                <Button
-                  variant={activeTab === 'all' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setActiveTab('all');
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs"
-                >
-                  All Employees ({allEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'present' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setActiveTab('present');
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs"
-                >
-                  Present ({presentEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'weekly-off' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setActiveTab('weekly-off');
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs"
-                >
-                  Weekly Off ({weeklyOffEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'leave' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setActiveTab('leave');
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs"
-                >
-                  Leave ({leaveEmployees.length})
-                </Button>
-                <Button
-                  variant={activeTab === 'absent' ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setActiveTab('absent');
-                    setCurrentPage(1);
-                  }}
-                  className="text-xs"
-                >
-                  Absent ({absentEmployees.length})
-                </Button>
+        {/* Employee Table with Photo View */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+        >
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <CardTitle>
+                  Employee Details - {filteredEmployees.length} employees found
+                  {dailyView ? ` for ${formatDateDisplay(selectedDate)}` : ` across ${siteData.daysInPeriod} days (cumulative)`}
+                </CardTitle>
+                <div className="text-sm text-muted-foreground">
+                  Showing {paginatedEmployees.length} of {filteredEmployees.length} filtered employees
+                </div>
               </div>
-
-              {/* Search */}
-              <div className="flex items-center gap-2 w-full lg:w-auto">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search employees..."
-                  value={employeeSearch}
-                  onChange={(e) => {
-                    setEmployeeSearch(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  className="w-full lg:w-64"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      {/* Employee Table */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-      >
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <CardTitle>
-                Employee Details - {filteredEmployees.length} employees found
-                {dailyView ? ` for ${formatDateDisplay(selectedDate)}` : ` across ${siteData.daysInPeriod} days (cumulative)`}
-              </CardTitle>
-              <div className="text-sm text-muted-foreground">
-                Showing {paginatedEmployees.length} of {filteredEmployees.length} filtered employees
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {refreshing ? (
-              <div className="flex justify-center items-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-primary mr-3" />
-                <span className="text-muted-foreground">Loading employee data...</span>
-              </div>
-            ) : (
-              <div className="rounded-md border">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/50">
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Employee ID
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Name
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Department
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Position
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Role Type
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Status
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Check In
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Check Out
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Date
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Action
-                        </th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                          Remark
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {paginatedEmployees.map((employee: Employee) => (
-                        <tr key={employee.id} className={`border-b hover:bg-muted/50 ${(employee.isManager || employee.isSupervisor) ? 'bg-amber-50/30' : ''}`}>
-                          <td className="p-4 align-middle font-medium">
-                            <div className="font-mono text-xs">{employee.employeeId || employee.id.split('_')[0]}</div>
-                            {employee.email && (
-                              <div className="text-xs text-muted-foreground truncate max-w-[150px]">
-                                {employee.email}
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-4 align-middle">
-                            <div className="font-medium">{employee.name}</div>
-                            {employee.phone && (
-                              <div className="text-xs text-muted-foreground">{employee.phone}</div>
-                            )}
-                          </td>
-                          <td className="p-4 align-middle">
-                            <Badge variant="outline">{employee.department}</Badge>
-                          </td>
-                          <td className="p-4 align-middle">
-                            {employee.position}
-                          </td>
-                          <td className="p-4 align-middle">
-                            {employee.isManager ? (
-                              <Badge className="bg-amber-100 text-amber-800 border-amber-200">Manager</Badge>
-                            ) : employee.isSupervisor ? (
-                              <Badge className="bg-teal-100 text-teal-800 border-teal-200">Supervisor</Badge>
-                            ) : (
-                              <Badge className="bg-cyan-100 text-cyan-800 border-cyan-200">Staff</Badge>
-                            )}
-                          </td>
-                          <td className="p-4 align-middle">
-                            <Badge 
-                              variant={
-                                employee.status === 'present' ? 'default' :
-                                employee.status === 'weekly-off' ? 'secondary' :
-                                employee.status === 'leave' ? 'outline' :
-                                'destructive'
-                              }
-                            >
-                              {employee.status === 'weekly-off' ? 'Weekly Off' : 
-                               employee.status === 'leave' ? 'Leave' :
-                               employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
-                            </Badge>
-                          </td>
-                          <td className="p-4 align-middle">
-                            {employee.checkInTime || '-'}
-                          </td>
-                          <td className="p-4 align-middle">
-                            {employee.checkOutTime || '-'}
-                          </td>
-                          <td className="p-4 align-middle">
-                            {employee.date ? formatDateDisplay(employee.date) : '-'}
-                          </td>
-                          <td className="p-4 align-middle">
-                            <Select 
-                              value={employee.action || 'none'}
-                              onValueChange={(value) => updateEmployeeAction(employee.id, value === 'none' ? '' : value as 'fine' | 'advance' | 'other' | '')}
-                            >
-                              <SelectTrigger className="h-8 text-xs w-32">
-                                <SelectValue placeholder="Select action" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="none">No Action</SelectItem>
-                                <SelectItem value="fine">Fine</SelectItem>
-                                <SelectItem value="advance">Advance</SelectItem>
-                                <SelectItem value="other">Other</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </td>
-                          <td className="p-4 align-middle">
-                            <Input
-                              value={employee.remark || ''}
-                              placeholder="Add remark..."
-                              className="h-8 text-xs"
-                              onChange={(e) => updateEmployeeRemark(employee.id, e.target.value)}
-                            />
-                          </td>
+            </CardHeader>
+            <CardContent>
+              {refreshing ? (
+                <div className="flex justify-center items-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mr-3" />
+                  <span className="text-muted-foreground">Loading employee data...</span>
+                </div>
+              ) : (
+                <div className="rounded-md border">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/50">
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Employee ID
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Name
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Department
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Position
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Role Type
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Status
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Check In
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Check Out
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Check In Photo
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Check Out Photo
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Date
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Action
+                          </th>
+                          <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
+                            Remark
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {paginatedEmployees.map((employee: Employee) => (
+                          <tr key={employee.id} className={`border-b hover:bg-muted/50 ${(employee.isManager || employee.isSupervisor) ? 'bg-amber-50/30' : ''}`}>
+                            <td className="p-4 align-middle font-medium">
+                              <div className="font-mono text-xs">{employee.employeeId || employee.id.split('_')[0]}</div>
+                              {employee.email && (
+                                <div className="text-xs text-muted-foreground truncate max-w-[150px]">
+                                  {employee.email}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <div className="font-medium">{employee.name}</div>
+                              {employee.phone && (
+                                <div className="text-xs text-muted-foreground">{employee.phone}</div>
+                              )}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Badge variant="outline">{employee.department}</Badge>
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.position}
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.isManager ? (
+                                <Badge className="bg-amber-100 text-amber-800 border-amber-200">Manager</Badge>
+                              ) : employee.isSupervisor ? (
+                                <Badge className="bg-teal-100 text-teal-800 border-teal-200">Supervisor</Badge>
+                              ) : (
+                                <Badge className="bg-cyan-100 text-cyan-800 border-cyan-200">Staff</Badge>
+                              )}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Badge 
+                                variant={
+                                  employee.status === 'present' ? 'default' :
+                                  employee.status === 'weekly-off' ? 'secondary' :
+                                  employee.status === 'leave' ? 'outline' :
+                                  'destructive'
+                                }
+                              >
+                                {employee.status === 'weekly-off' ? 'Weekly Off' : 
+                                 employee.status === 'leave' ? 'Leave' :
+                                 employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
+                              </Badge>
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkInTime || '-'}
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkOutTime || '-'}
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkInPhoto ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleViewPhoto(employee.checkInPhoto, 'checkin')}
+                                  className="h-8 px-2"
+                                >
+                                  <Camera className="h-4 w-4 mr-1" />
+                                  View
+                                </Button>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
+                              )}
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.checkOutPhoto ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleViewPhoto(employee.checkOutPhoto, 'checkout')}
+                                  className="h-8 px-2"
+                                >
+                                  <Camera className="h-4 w-4 mr-1" />
+                                  View
+                                </Button>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
+                              )}
+                            </td>
+                            <td className="p-4 align-middle">
+                              {employee.date ? formatDateDisplay(employee.date) : '-'}
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Select 
+                                value={employee.action || 'none'}
+                                onValueChange={(value) => updateEmployeeAction(employee.id, value === 'none' ? '' : value as 'fine' | 'advance' | 'other' | '')}
+                              >
+                                <SelectTrigger className="h-8 text-xs w-32">
+                                  <SelectValue placeholder="Select action" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">No Action</SelectItem>
+                                  <SelectItem value="fine">Fine</SelectItem>
+                                  <SelectItem value="advance">Advance</SelectItem>
+                                  <SelectItem value="other">Other</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </td>
+                            <td className="p-4 align-middle">
+                              <Input
+                                value={employee.remark || ''}
+                                placeholder="Add remark..."
+                                className="h-8 text-xs"
+                                onChange={(e) => updateEmployeeRemark(employee.id, e.target.value)}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination */}
+                  {filteredEmployees.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
+                      <div className="text-sm text-muted-foreground">
+                        Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(1)}
+                          disabled={currentPage === 1}
+                        >
+                          First
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(currentPage - 1)}
+                          disabled={currentPage === 1}
+                        >
+                          Previous
+                        </Button>
+                        
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum;
+                          if (totalPages <= 5) {
+                            pageNum = i + 1;
+                          } else if (currentPage <= 3) {
+                            pageNum = i + 1;
+                          } else if (currentPage >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i;
+                          } else {
+                            pageNum = currentPage - 2 + i;
+                          }
+
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={currentPage === pageNum ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => setCurrentPage(pageNum)}
+                            >
+                              {pageNum}
+                            </Button>
+                          );
+                        })}
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(currentPage + 1)}
+                          disabled={currentPage === totalPages}
+                        >
+                          Next
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentPage(totalPages)}
+                          disabled={currentPage === totalPages}
+                        >
+                          Last
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Empty State */}
+                  {filteredEmployees.length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="text-muted-foreground">
+                        No employees found for the selected filters.
+                      </div>
+                    </div>
+                  )}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
 
-                {/* Pagination */}
-                {filteredEmployees.length > 0 && (
-                  <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 gap-4">
-                    <div className="text-sm text-muted-foreground">
-                      Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredEmployees.length)} of {filteredEmployees.length} entries
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(1)}
-                        disabled={currentPage === 1}
-                      >
-                        First
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(currentPage - 1)}
-                        disabled={currentPage === 1}
-                      >
-                        Previous
-                      </Button>
-                      
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum;
-                        if (totalPages <= 5) {
-                          pageNum = i + 1;
-                        } else if (currentPage <= 3) {
-                          pageNum = i + 1;
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i;
-                        } else {
-                          pageNum = currentPage - 2 + i;
-                        }
-
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={currentPage === pageNum ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setCurrentPage(pageNum)}
-                          >
-                            {pageNum}
-                          </Button>
-                        );
-                      })}
-
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(currentPage + 1)}
-                        disabled={currentPage === totalPages}
-                      >
-                        Next
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(totalPages)}
-                        disabled={currentPage === totalPages}
-                      >
-                        Last
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                
-                {/* Empty State */}
-                {filteredEmployees.length === 0 && (
-                  <div className="text-center py-8">
-                    <div className="text-muted-foreground">
-                      No employees found for the selected filters.
-                    </div>
-                  </div>
-                )}
-              </div>
+      {/* Photo Modal */}
+      <Dialog open={photoModalOpen} onOpenChange={setPhotoModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedPhotoType === 'checkin' ? 'Check-in Photo' : 'Check-out Photo'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-center">
+            {selectedPhoto && (
+              <img
+                src={selectedPhoto}
+                alt={`${selectedPhotoType} photo`}
+                className="max-w-full h-auto rounded-lg shadow-lg"
+                onError={(e) => {
+                  console.error('Failed to load image:', selectedPhoto);
+                  e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2"%3E%3Crect x="2" y="2" width="20" height="20" rx="2.18"%3E%3C/rect%3E%3Cpath d="M8 2v20M16 2v20M2 8h20M2 16h20"%3E%3C/path%3E%3C/svg%3E';
+                  toast.error('Failed to load photo');
+                }}
+              />
             )}
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPhotoModalOpen(false)}>Close</Button>
+            {selectedPhoto && (
+              <Button onClick={() => window.open(selectedPhoto, '_blank')}>
+                <ExternalLink className="h-4 w-4 mr-2" /> Open Original
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 
@@ -2077,7 +2130,6 @@ const SuperAdminAttendanceView = () => {
         console.log(`✅ Successfully fetched ${sitesData.length} sites`);
         setSites(sitesData);
         
-        // Calculate display data with real employee data
         await calculateDisplayData(sitesData);
       } else {
         console.warn('⚠️ No sites data received or invalid format');
@@ -2111,14 +2163,12 @@ const SuperAdminAttendanceView = () => {
           siteData = await calculateSiteAttendanceData(site, startDate, endDate);
         }
         
-        // Ensure siteData has employees array even if empty
         if (!siteData.employees) {
           siteData.employees = [];
         }
         
         calculatedData.push(siteData);
         
-        // Add small delay to avoid overwhelming the server
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       
@@ -2126,7 +2176,6 @@ const SuperAdminAttendanceView = () => {
       console.log(`✅ Calculated display data for ${calculatedData.length} sites`);
     } catch (error) {
       console.error('Error calculating display data:', error);
-      // Fallback to empty data with employees array
       setDisplayData(sitesData.map(site => ({
         ...site,
         employees: [],
@@ -2172,12 +2221,10 @@ const SuperAdminAttendanceView = () => {
     }
   }, [viewType, selectedDepartment, startDate, endDate]);
 
-  // Calculate days in period
   const daysInPeriod = useMemo(() => {
     return calculateDaysBetween(startDate, endDate);
   }, [startDate, endDate]);
 
-  // Filter data based on search term
   const filteredData = useMemo(() => {
     if (!displayData || displayData.length === 0) return [];
     
@@ -2187,7 +2234,6 @@ const SuperAdminAttendanceView = () => {
     );
   }, [displayData, searchTerm]);
 
-  // Calculate overall totals for the period
   const overallTotals = useMemo(() => {
     if (filteredData.length === 0) {
       return {
@@ -2207,19 +2253,16 @@ const SuperAdminAttendanceView = () => {
       };
     }
     
-    // Calculate duration totals (cumulative)
     const durationTotalRequired = filteredData.reduce((sum, item) => sum + (item.totalRequiredForPeriod || item.durationTotalRequired || 0), 0);
     const durationWeeklyOff = filteredData.reduce((sum, item) => sum + (item.totalWeeklyOff || item.weeklyOffCount || 0), 0);
     const durationOnSiteRequirement = filteredData.reduce((sum, item) => sum + (item.durationOnSiteRequirement || 0), 0);
     const durationPresent = filteredData.reduce((sum, item) => sum + (item.totalPresent || item.presentCount || 0), 0);
     const durationAbsent = filteredData.reduce((sum, item) => sum + (item.totalAbsent || 0) + (item.totalLeave || 0), 0);
     
-    // Calculate deployment totals
     const totalManagers = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.managerCount || 0), 0);
     const totalSupervisors = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.supervisorCount || 0), 0);
     const totalStaff = filteredData.reduce((sum, item) => sum + (item.deploymentStats?.staffCount || 0), 0);
     
-    // Existing calculations
     const totalEmployees = filteredData.reduce((sum, item) => sum + (item.dailyRequirement || item.totalEmployees || item.total), 0);
     const totalRequiredAttendance = filteredData.reduce((sum, item) => sum + (item.totalRequiredForPeriod || item.totalRequiredAttendance || 0), 0);
     const totalPresentAttendance = filteredData.reduce((sum, item) => sum + (item.totalPresentAttendance || 0), 0);
@@ -2243,20 +2286,17 @@ const SuperAdminAttendanceView = () => {
     };
   }, [filteredData]);
 
-  // Paginate data
   const paginatedData = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     return filteredData.slice(startIndex, startIndex + itemsPerPage);
   }, [filteredData, currentPage, itemsPerPage]);
 
-  // Handle export to Excel
   const handleExportToExcel = () => {
     if (filteredData.length === 0) {
       toast.error('No data to export');
       return;
     }
 
-    // Original columns with cumulative totals
     const headers = ['Site Name', 'Department', 'Period', 'Days', 'Daily Staff Requirement', 'Total Required', 'Weekly Off (Staff)', 'On Site Requirement', 'Total Present (Staff)', 'Leave (Staff)', 'Absent (Staff)', 'Managers', 'Supervisors', 'Total Staff', 'Attendance Rate', 'Data Source'];
     const filename = viewType === 'department' 
       ? `Attendance_${selectedDepartment}_${startDate}_to_${endDate}.csv`
@@ -2268,19 +2308,17 @@ const SuperAdminAttendanceView = () => {
         const dailyRequirement = item.dailyRequirement || 0;
         const totalRequired = item.totalRequiredForPeriod || item.durationTotalRequired || (dailyRequirement * daysInPeriod);
         
-        // Show cumulative totals for the period (staff only)
         const weeklyOff = item.totalWeeklyOff || item.weeklyOffCount || 0;
         const onSiteRequirement = totalRequired - weeklyOff;
         const present = item.totalPresent || item.presentCount || 0;
         const leave = item.totalLeave || item.leaveCount || 0;
         const absent = item.totalAbsent || item.absentCount || 0;
         
-        // Deployment stats
         const managers = item.deploymentStats?.managerCount || 0;
         const supervisors = item.deploymentStats?.supervisorCount || 0;
         const staff = item.deploymentStats?.staffCount || 0;
         
-        const rate = totalRequired > 0 ? (((present + weeklyOff) / totalRequired) * 100).toFixed(1) + '%' : '0.0%';
+        const rate = totalRequired > 0 ? ((present / totalRequired) * 100).toFixed(1) + '%' : '0.0%';
         const dataSource = item.isRealData ? 'Real Data' : 'Demo Data';
         
         return [
@@ -2321,17 +2359,14 @@ const SuperAdminAttendanceView = () => {
     toast.success(`Data exported to ${filename}`);
   };
 
-  // Handle back navigation
   const handleBack = () => {
     navigate('/superadmin/dashboard');
   };
 
-  // Handle page change
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
   };
 
-  // Handle view type change
   const handleViewTypeChange = (newViewType: 'site' | 'department') => {
     setViewType(newViewType);
     setCurrentPage(1);
@@ -2342,14 +2377,12 @@ const SuperAdminAttendanceView = () => {
     }
   };
 
-  // Handle view details click
   const handleViewDetails = (siteData: any) => {
     if (!siteData) return;
     
     setSelectedSite(siteData);
     setShowSiteDetails(true);
     
-    // Update URL params
     const params = new URLSearchParams();
     params.set('view', viewType);
     if (viewType === 'department') {
@@ -2363,12 +2396,10 @@ const SuperAdminAttendanceView = () => {
     navigate(`?${params.toString()}`, { replace: true });
   };
 
-  // Handle back from site details
   const handleBackFromDetails = () => {
     setShowSiteDetails(false);
     setSelectedSite(null);
     
-    // Update URL params
     const params = new URLSearchParams();
     params.set('view', viewType);
     if (viewType === 'department') {
@@ -2380,7 +2411,6 @@ const SuperAdminAttendanceView = () => {
     navigate(`?${params.toString()}`, { replace: true });
   };
 
-  // Load selected site from URL params on component mount
   useEffect(() => {
     if (initialSiteDetails && initialSelectedSiteId && displayData.length > 0) {
       const site = displayData.find(item => item.id === initialSelectedSiteId || item.siteId === initialSelectedSiteId);
@@ -2391,10 +2421,8 @@ const SuperAdminAttendanceView = () => {
     }
   }, [initialSiteDetails, initialSelectedSiteId, displayData]);
 
-  // Calculate total pages
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
 
-  // Pagination Component
   const Pagination = () => {
     const startItem = (currentPage - 1) * itemsPerPage + 1;
     const endItem = Math.min(currentPage * itemsPerPage, filteredData.length);
@@ -2467,7 +2495,6 @@ const SuperAdminAttendanceView = () => {
     );
   };
 
-  // Refresh all data
   const handleRefreshAll = async () => {
     try {
       setRefreshing(true);
@@ -2482,12 +2509,10 @@ const SuperAdminAttendanceView = () => {
     }
   };
 
-  // Check if we have real employee data
   const hasRealEmployeeData = useMemo(() => {
     return displayData.some(item => item.isRealData);
   }, [displayData]);
 
-  // Render loading state
   if (loading && sites.length === 0) {
     return (
       <div className="min-h-screen bg-background p-6 flex items-center justify-center">
@@ -2500,7 +2525,6 @@ const SuperAdminAttendanceView = () => {
     );
   }
 
-  // Render error state
   if (error && sites.length === 0) {
     return (
       <div className="min-h-screen bg-background p-6">
@@ -2517,7 +2541,6 @@ const SuperAdminAttendanceView = () => {
     );
   }
 
-  // If showing site details, render the SiteEmployeeDetails component
   if (showSiteDetails) {
     return (
       <SiteEmployeeDetails
@@ -2594,7 +2617,7 @@ const SuperAdminAttendanceView = () => {
                   <div>
                     <h3 className="font-medium text-green-800">Employee API Connected</h3>
                     <p className="text-sm text-green-700">
-                      Real employee data is being fetched from the server for the selected date range. The table shows CUMULATIVE totals for the entire period, excluding managers and supervisors.
+                      Real employee data is being fetched from the server for the selected date range. Photos are included when available.
                     </p>
                   </div>
                 </div>
@@ -2641,7 +2664,7 @@ const SuperAdminAttendanceView = () => {
                 </Select>
               </div>
 
-              {/* Department Selector (only shown in department view) */}
+              {/* Department Selector */}
               {viewType === 'department' && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Select Department</label>
@@ -2701,7 +2724,7 @@ const SuperAdminAttendanceView = () => {
         </Card>
       </motion.div>
 
-      {/* Loading indicator for data refresh */}
+      {/* Loading indicator */}
       {(refreshing || loading) && (
         <div className="mb-6">
           <Card>
@@ -2717,7 +2740,7 @@ const SuperAdminAttendanceView = () => {
         </div>
       )}
 
-      {/* Period Summary Cards - CUMULATIVE TOTALS */}
+      {/* Period Summary Cards */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -2729,7 +2752,6 @@ const SuperAdminAttendanceView = () => {
             <div className="text-sm">
               <h3 className="font-semibold mb-2 text-lg">Cumulative Totals for {daysInPeriod} Days (Staff Only):</h3>
               
-              {/* Cumulative Totals Summary */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
                 <div className="bg-white p-3 rounded-lg border">
                   <div className="font-medium text-green-700">Total Required</div>
@@ -2747,7 +2769,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.durationWeeklyOff.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    Cumulative for {daysInPeriod} days
+                    Only explicit weekly-off status
                   </div>
                 </div>
                 
@@ -2767,7 +2789,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.durationPresent.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    Cumulative for {daysInPeriod} days
+                    Actual present count
                   </div>
                 </div>
                 
@@ -2777,12 +2799,11 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.durationAbsent.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    Cumulative for {daysInPeriod} days
+                    Absent + Leave (no attendance record)
                   </div>
                 </div>
               </div>
               
-              {/* Deployment Summary */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div className="bg-white p-3 rounded-lg border">
                   <div className="font-medium text-amber-700">Total Managers</div>
@@ -2804,7 +2825,6 @@ const SuperAdminAttendanceView = () => {
                 </div>
               </div>
               
-              {/* Attendance Rate Summary */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div className="bg-white p-3 rounded-lg border">
                   <div className="font-medium text-green-700">Total Required Attendance</div>
@@ -2812,7 +2832,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.totalRequiredAttendance.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    = {overallTotals.totalEmployees} staff × {daysInPeriod} days
+                    = Staff Req × {daysInPeriod} days
                   </div>
                 </div>
                 <div className="bg-white p-3 rounded-lg border">
@@ -2821,7 +2841,7 @@ const SuperAdminAttendanceView = () => {
                     {overallTotals.totalPresentAttendance.toLocaleString()}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
-                    (Including weekly off)
+                    Actual present count (weekly-off excluded)
                   </div>
                 </div>
                 <div className="bg-white p-3 rounded-lg border">
@@ -2838,8 +2858,10 @@ const SuperAdminAttendanceView = () => {
               <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
                 <h4 className="font-medium text-yellow-800 mb-1">Important Note:</h4>
                 <p className="text-yellow-700 text-sm">
-                  <strong>All calculations above exclude managers and supervisors.</strong> Only staff positions count toward the requirement.
-                  The table below shows CUMULATIVE totals for the entire {daysInPeriod}-day period, not daily averages.
+                  <strong>Weekly Off is only counted when explicitly marked as 'weekly-off' in attendance.</strong> 
+                  Employees with no attendance record are counted as Absent, not Weekly Off.
+                  All calculations above exclude managers and supervisors. Only staff positions count toward the requirement.
+                  Attendance photos are displayed in the employee details view.
                 </p>
               </div>
             </div>
@@ -2864,7 +2886,7 @@ const SuperAdminAttendanceView = () => {
                 }
                 {hasRealEmployeeData && (
                   <span className="ml-2 text-green-600">
-                    • Real employee data available
+                    • Real employee data available with photos
                   </span>
                 )}
               </div>
@@ -2893,7 +2915,7 @@ const SuperAdminAttendanceView = () => {
         </Card>
       </motion.div>
 
-      {/* Data Table - Showing CUMULATIVE TOTALS */}
+      {/* Data Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -2983,33 +3005,30 @@ const SuperAdminAttendanceView = () => {
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
                           Actions
                         </th>
-                      </tr>
+                       </tr>
                     </thead>
                     <tbody>
                       {paginatedData.map((item, index) => {
                         const dailyRequirement = item.dailyRequirement || 0;
                         const totalRequired = item.totalRequiredForPeriod || item.durationTotalRequired || (dailyRequirement * daysInPeriod);
                         
-                        // CUMULATIVE TOTALS for the period (staff only)
                         const weeklyOff = item.totalWeeklyOff || item.weeklyOffCount || 0;
                         const onSiteRequirement = totalRequired - weeklyOff;
                         const present = item.totalPresent || item.presentCount || 0;
                         const leave = item.totalLeave || item.leaveCount || 0;
                         const absent = item.totalAbsent || item.absentCount || 0;
                         
-                        // Deployment stats
                         const managers = item.deploymentStats?.managerCount || 0;
                         const supervisors = item.deploymentStats?.supervisorCount || 0;
                         const staff = item.deploymentStats?.staffCount || 0;
                         
-                        const rate = totalRequired > 0 ? (((present + weeklyOff) / totalRequired) * 100).toFixed(1) : '0.0';
+                        const rate = totalRequired > 0 ? ((present / totalRequired) * 100).toFixed(1) : '0.0';
                         const status = parseFloat(rate) >= 90 ? 'Excellent' :
                                       parseFloat(rate) >= 80 ? 'Good' :
                                       parseFloat(rate) >= 70 ? 'Average' : 'Poor';
 
-                        // Get the most common department from employees for this site
-                        const departments = item.employees?.map((emp: Employee) => emp.department) || [];
-                        const departmentCounts = departments.reduce((acc: {[key: string]: number}, dept: string) => {
+                        const departmentsFromEmp = item.employees?.map((emp: Employee) => emp.department) || [];
+                        const departmentCounts = departmentsFromEmp.reduce((acc: {[key: string]: number}, dept: string) => {
                           acc[dept] = (acc[dept] || 0) + 1;
                           return acc;
                         }, {});
@@ -3026,87 +3045,63 @@ const SuperAdminAttendanceView = () => {
                               <div className="text-xs text-muted-foreground">
                                 {item.daysInPeriod} {item.daysInPeriod === 1 ? 'day' : 'days'}
                               </div>
-                            </td>
+                             </td>
                             <td className="p-4 align-middle">
                               <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
                                 {viewType === 'department' ? selectedDepartment : primaryDepartment}
                               </Badge>
-                            </td>
-                            
-                            {/* Daily Staff Requirement */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-indigo-700 bg-indigo-50">
                               {dailyRequirement}
-                            </td>
-                            
-                            {/* Total Required - Daily Requirement × Days */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-blue-700 bg-blue-50">
                               {totalRequired}
                               <div className="text-xs text-blue-600 mt-1">
                                 {dailyRequirement} × {daysInPeriod}
                               </div>
-                            </td>
-                            
-                            {/* Weekly Off - CUMULATIVE */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-purple-700 bg-purple-50">
                               {weeklyOff}
                               <div className="text-xs text-purple-600 mt-1">
-                                Over {daysInPeriod} days
+                                Explicit weekly-off
                               </div>
-                            </td>
-                            
-                            {/* On Site Requirement - CUMULATIVE */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-amber-700 bg-amber-50">
                               {onSiteRequirement.toLocaleString()}
                               <div className="text-xs text-amber-600 mt-1">
                                 Req - WO
                               </div>
-                            </td>
-                            
-                            {/* Total Present - CUMULATIVE */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-green-700 bg-green-50">
                               {present}
                               <div className="text-xs text-green-600 mt-1">
-                                Over {daysInPeriod} days
+                                Actual present
                               </div>
-                            </td>
-                            
-                            {/* Leave - CUMULATIVE */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-orange-700 bg-orange-50">
                               {leave}
                               <div className="text-xs text-orange-600 mt-1">
                                 Over {daysInPeriod} days
                               </div>
-                            </td>
-                            
-                            {/* Absent - CUMULATIVE */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-red-700 bg-red-50">
                               {absent}
                               <div className="text-xs text-red-600 mt-1">
-                                Over {daysInPeriod} days
+                                No record / absent
                               </div>
-                            </td>
-                            
-                            {/* Managers */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-amber-700 bg-amber-50">
                               {managers}
-                            </td>
-                            
-                            {/* Supervisors */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-teal-700 bg-teal-50">
                               {supervisors}
-                            </td>
-                            
-                            {/* Staff */}
+                             </td>
                             <td className="p-4 align-middle font-bold text-cyan-700 bg-cyan-50">
                               {staff}
-                            </td>
-                            
-                            {/* Attendance Rate */}
+                             </td>
                             <td className="p-4 align-middle font-bold">
                               {rate}%
-                            </td>
-                            
-                            {/* Status */}
+                             </td>
                             <td className="p-4 align-middle">
                               <Badge variant={
                                 status === 'Excellent' ? 'default' :
@@ -3115,9 +3110,7 @@ const SuperAdminAttendanceView = () => {
                               }>
                                 {status}
                               </Badge>
-                            </td>
-                            
-                            {/* Actions */}
+                             </td>
                             <td className="p-4 align-middle">
                               <Button
                                 variant="outline"
@@ -3127,15 +3120,14 @@ const SuperAdminAttendanceView = () => {
                                 <Eye className="h-4 w-4 mr-1" />
                                 View Details
                               </Button>
-                            </td>
-                          </tr>
+                             </td>
+                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Pagination */}
                 {filteredData.length > 0 && <Pagination />}
               </div>
             )}

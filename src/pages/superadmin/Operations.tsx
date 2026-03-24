@@ -23,6 +23,7 @@ import ServicesSection from "./components/ServicesSection";
 import AlertsSection from "./components/AlertsSection";
 import PriceCalculator from "./components/PriceCalculator";
 import { initialTasks, initialSites, initialRoster, serviceTypes, initialAlerts } from "./data";
+import AssignTaskPage from "./components/AssignTaskPage";
 
 // Mobile responsive tab selector
 const MobileTabSelector = ({
@@ -95,7 +96,7 @@ const Operations = () => {
   // Define tabs for mobile selector
   const tabs = [
     { value: "tasks", label: "Tasks", icon: <ClipboardList className="h-4 w-4" /> },
-    // { value: "assign", label: "Assign Task", icon: <ClipboardList className="h-4 w-4" /> },
+     { value: "assign", label: "Assign Task", icon: <ClipboardList className="h-4 w-4" /> },
     { value: "sites", label: "Sites", icon: <Building className="h-4 w-4" /> },
     { value: "roster", label: "Roster", icon: <ClipboardList className="h-4 w-4" /> },
     { value: "services", label: "Services", icon: <ClipboardList className="h-4 w-4" /> },
@@ -129,10 +130,10 @@ const Operations = () => {
               <ClipboardList className="h-4 w-4 mr-2" />
               Tasks
             </TabsTrigger>
-            {/* <TabsTrigger value="assign" className="text-sm">
+           <TabsTrigger value="assign" className="text-sm">
               <ClipboardList className="h-4 w-4 mr-2" />
               Assign Task
-            </TabsTrigger> */}
+            </TabsTrigger>
             <TabsTrigger value="sites" className="text-sm">
               <Building className="h-4 w-4 mr-2" />
               Sites
@@ -162,9 +163,9 @@ const Operations = () => {
           </TabsContent>
 
           {/* Assign Task Tab */}
-          {/* <TabsContent value="assign">
-            <AssignTaskSection />
-          </TabsContent> */}
+          <TabsContent value="assign">
+            <AssignTaskPage />
+          </TabsContent> 
 
           {/* Sites Tab */}
           <TabsContent value="sites">

@@ -1,3 +1,4 @@
+// models/Attendance.ts
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IAttendance extends Document {
@@ -6,6 +7,8 @@ export interface IAttendance extends Document {
   date: string;
   checkInTime: string | null;
   checkOutTime: string | null;
+  checkInPhoto: string | null;      // New: Cloudinary URL for check-in photo
+  checkOutPhoto: string | null;     // New: Cloudinary URL for check-out photo
   breakStartTime: string | null;
   breakEndTime: string | null;
   totalHours: number;
@@ -46,6 +49,14 @@ const attendanceSchema = new Schema<IAttendance>(
       default: null,
     },
     checkOutTime: {
+      type: String,
+      default: null,
+    },
+    checkInPhoto: {
+      type: String,
+      default: null,
+    },
+    checkOutPhoto: {
       type: String,
       default: null,
     },

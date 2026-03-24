@@ -61,7 +61,8 @@ import taskService, {
   type Attachment,
   type HourlyUpdate,
   type AssignedUser,
-  type UpdateTaskRequest
+  type UpdateTaskRequest,
+  type StaffMember
 } from "@/services/TaskService";
 
 // Components
@@ -126,7 +127,7 @@ interface SiteStaffingRequirements {
   missingRoles: ('manager' | 'supervisor')[];
   isManagerRequirementMet: boolean;
   isSupervisorRequirementMet: boolean;
-  hasAnyAssignee: boolean; // Added this field
+  hasAnyAssignee: boolean;
 }
 
 // Interface for task staffing status
@@ -233,7 +234,7 @@ const StaffingRequirementsIndicator = ({
   );
 };
 
-// Multi-select Combobox for Assignees with site-based limits and supervisor restriction
+// Multi-select Combobox for Assignees with site-based limits and supervisor restriction - UPDATED with proper validation
 const AssigneeMultiSelect = ({ 
   assignees, 
   selectedAssignees, 
@@ -295,6 +296,18 @@ const AssigneeMultiSelect = ({
     return usage;
   }, [selectedSites, siteStaffingRequirements]);
 
+  // Ensure assignedSupervisorsMap is a Map
+  const supervisorsMap = useMemo(() => {
+    if (!assignedSupervisorsMap) return new Map();
+    if (assignedSupervisorsMap instanceof Map) return assignedSupervisorsMap;
+    // If it's not a Map, convert it to a Map
+    try {
+      return new Map(Object.entries(assignedSupervisorsMap));
+    } catch {
+      return new Map();
+    }
+  }, [assignedSupervisorsMap]);
+
   // Check if assignee can be selected based on site limits AND supervisor assignment restrictions
   const canSelectAssignee = (assignee: Assignee): {canSelect: boolean, reason?: string} => {
     if (!assignee) return {canSelect: false, reason: "Assignee not found"};
@@ -313,9 +326,9 @@ const AssigneeMultiSelect = ({
       let isSupervisorAssignedElsewhere = false;
       let assignedSiteNames: string[] = [];
       
-      // Check all sites in the assignedSupervisorsMap
-      assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-        if (supervisorIds.has(assignee._id)) {
+      // Check all sites in the supervisorsMap - safely using forEach
+      supervisorsMap.forEach((supervisorIds, siteId) => {
+        if (supervisorIds && supervisorIds.has && supervisorIds.has(assignee._id)) {
           isSupervisorAssignedElsewhere = true;
           const site = sites.find(s => s._id === siteId);
           if (site) {
@@ -498,8 +511,8 @@ const AssigneeMultiSelect = ({
               const currentManager = requirements?.assignedManagers || 0;
               const currentSupervisor = requirements?.assignedSupervisors || 0;
               
-              // Get already assigned supervisors for this site
-              const alreadyAssignedSupervisors = assignedSupervisorsMap.get(siteId) || new Set();
+              // Get already assigned supervisors for this site - safely using get
+              const alreadyAssignedSupervisors = supervisorsMap.get(siteId) || new Set();
               const alreadyAssignedCount = alreadyAssignedSupervisors.size;
               
               const managerRemaining = Math.max(0, managerLimit - currentManager);
@@ -542,7 +555,7 @@ const AssigneeMultiSelect = ({
       )}
 
       {/* Supervisor Restriction Notice */}
-      {assigneeType === "supervisor" && assignedSupervisorsMap.size > 0 && (
+      {assigneeType === "supervisor" && supervisorsMap.size > 0 && (
         <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg">
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
@@ -605,8 +618,8 @@ const AssigneeMultiSelect = ({
                   let assignedSiteNames: string[] = [];
                   
                   if (assignee.role === 'supervisor') {
-                    assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-                      if (supervisorIds.has(assignee._id)) {
+                    supervisorsMap.forEach((supervisorIds, siteId) => {
+                      if (supervisorIds && supervisorIds.has && supervisorIds.has(assignee._id)) {
                         isSupervisorAssignedElsewhere = true;
                         const site = sites.find(s => s._id === siteId);
                         if (site) {
@@ -723,7 +736,7 @@ const SiteMultiSelect = ({
   isLoading,
   alreadyAssignedSiteIds = [],
   siteStaffingRequirements,
-  assigneeType // Added to filter sites based on which role we're assigning
+  assigneeType
 }: { 
   sites: ExtendedSite[];
   selectedSites: string[];
@@ -731,7 +744,7 @@ const SiteMultiSelect = ({
   isLoading: boolean;
   alreadyAssignedSiteIds?: string[];
   siteStaffingRequirements?: Map<string, SiteStaffingRequirements>;
-  assigneeType?: "all" | "manager" | "supervisor"; // Add this prop
+  assigneeType?: "all" | "manager" | "supervisor";
 }) => {
   const [open, setOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
@@ -1080,6 +1093,17 @@ const EditTaskDialog = ({
   const [oldUserId, setOldUserId] = useState<string>("");
   const [newUserId, setNewUserId] = useState<string>("");
 
+  // Ensure assignedSupervisorsMap is a Map
+  const supervisorsMap = useMemo(() => {
+    if (!assignedSupervisorsMap) return new Map();
+    if (assignedSupervisorsMap instanceof Map) return assignedSupervisorsMap;
+    try {
+      return new Map(Object.entries(assignedSupervisorsMap));
+    } catch {
+      return new Map();
+    }
+  }, [assignedSupervisorsMap]);
+
   // Update form when task changes
   useEffect(() => {
     if (task) {
@@ -1228,6 +1252,34 @@ const EditTaskDialog = ({
         return;
       }
       
+      // Check supervisor assignment restrictions
+      if (supervisorsToAdd > 0) {
+        const supervisorsToAddList = assignees
+          .filter(a => selectedAssignees.includes(a._id) && a.role === 'supervisor');
+        
+        for (const supervisor of supervisorsToAddList) {
+          // Check if this supervisor is already assigned elsewhere
+          let isAssignedElsewhere = false;
+          let assignedSiteNames: string[] = [];
+          
+          supervisorsMap.forEach((supervisorIds, siteId) => {
+            if (supervisorIds && supervisorIds.has && supervisorIds.has(supervisor._id) && siteId !== task.siteId) {
+              isAssignedElsewhere = true;
+              const site = sites.find(s => s._id === siteId);
+              if (site) {
+                assignedSiteNames.push(site.name);
+              }
+            }
+          });
+          
+          if (isAssignedElsewhere) {
+            toast.error(`Cannot add supervisor ${supervisor.name}. They are already assigned to: ${assignedSiteNames.join(', ')}`);
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+      
       // Get full assignee objects
       const assigneesToAdd = assignees
         .filter(a => selectedAssignees.includes(a._id))
@@ -1323,6 +1375,28 @@ const EditTaskDialog = ({
         return;
       }
       
+      // If replacing a supervisor, check if the new supervisor is already assigned elsewhere
+      if (newAssignee.role === 'supervisor') {
+        let isAssignedElsewhere = false;
+        let assignedSiteNames: string[] = [];
+        
+        supervisorsMap.forEach((supervisorIds, siteId) => {
+          if (supervisorIds && supervisorIds.has && supervisorIds.has(newAssignee._id) && siteId !== task.siteId) {
+            isAssignedElsewhere = true;
+            const site = sites.find(s => s._id === siteId);
+            if (site) {
+              assignedSiteNames.push(site.name);
+            }
+          }
+        });
+        
+        if (isAssignedElsewhere) {
+          toast.error(`Cannot replace with supervisor ${newAssignee.name}. They are already assigned to: ${assignedSiteNames.join(', ')}`);
+          setIsLoading(false);
+          return;
+        }
+      }
+      
       await taskService.replaceAssigneeInTask(task._id, oldUserId, {
         userId: newAssignee._id,
         name: newAssignee.name,
@@ -1368,10 +1442,10 @@ const EditTaskDialog = ({
       // Check if this supervisor is already assigned to this task
       if (currentAssignees.some(c => c._id === a._id)) return false;
       
-      // Check if this supervisor is assigned to any other site
+      // Check if this supervisor is assigned to any other site - safely using supervisorsMap
       let isAssignedElsewhere = false;
-      assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-        if (supervisorIds.has(a._id) && siteId !== task.siteId) {
+      supervisorsMap.forEach((supervisorIds, siteId) => {
+        if (supervisorIds && supervisorIds.has && supervisorIds.has(a._id) && siteId !== task.siteId) {
           isAssignedElsewhere = true;
         }
       });
@@ -1379,7 +1453,7 @@ const EditTaskDialog = ({
       // Only include supervisors that are NOT assigned anywhere else
       return !isAssignedElsewhere;
     });
-  }, [assignees, currentAssignees, assignedSupervisorsMap, task.siteId, assigneeMode, assigneeType]);
+  }, [assignees, currentAssignees, supervisorsMap, task.siteId, assigneeMode, assigneeType]);
 
   // Get available managers for replacement (not assigned to any site and not already in this task)
   const availableManagersForReplacement = useMemo(() => {
@@ -1477,39 +1551,16 @@ const EditTaskDialog = ({
               />
             </FormField>
 
-           // Add this inside the AddAssignTaskDialog component, right after the description Textarea
-<FormField label="Description" id="description" required>
-  <Textarea 
-    id="description" 
-    name="description" 
-    value={description}
-    onChange={(e) => setDescription(e.target.value)}
-    placeholder="Enter task description (minimum 5 words)" 
-    rows={3}
-    required 
-  />
-  <div className="mt-1 flex justify-between items-center">
-    <div className="text-xs text-muted-foreground">
-      Word count: {description.trim() ? description.trim().split(/\s+/).filter(word => word.length > 0).length : 0} / 5 minimum
-    </div>
-    {description.trim() && (
-      <div className="text-xs">
-        {description.trim().split(/\s+/).filter(word => word.length > 0).length < 5 ? (
-          <span className="text-amber-600">
-            Need {5 - description.trim().split(/\s+/).filter(word => word.length > 0).length} more word(s)
-          </span>
-        ) : (
-          <span className="text-green-600">
-            ✓ Minimum word count met
-          </span>
-        )}
-      </div>
-    )}
-  </div>
-  <div className="mt-1 text-xs text-blue-600">
-    <span>⚠️ Description must be at least 5 words to ensure proper task clarity</span>
-  </div>
-</FormField>
+            <FormField label="Description" id="edit-description" required>
+              <Textarea 
+                id="edit-description" 
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Enter task description" 
+                rows={3}
+                required 
+              />
+            </FormField>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField label="Priority" id="edit-priority" required>
@@ -1894,13 +1945,13 @@ const EditTaskDialog = ({
                     </div>
                   ) : (
                     availableAssignees.map(assignee => {
-                      // Check if this supervisor is already assigned elsewhere
+                      // Check if this supervisor is already assigned elsewhere - safely using supervisorsMap
                       let isSupervisorAssignedElsewhere = false;
                       let assignedSiteNames: string[] = [];
                       
                       if (assignee.role === 'supervisor' && assigneeMode === "add") {
-                        assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-                          if (supervisorIds.has(assignee._id) && siteId !== task.siteId) {
+                        supervisorsMap.forEach((supervisorIds, siteId) => {
+                          if (supervisorIds && supervisorIds.has && supervisorIds.has(assignee._id) && siteId !== task.siteId) {
                             isSupervisorAssignedElsewhere = true;
                             const site = sites.find(s => s._id === siteId);
                             if (site) {
@@ -1999,10 +2050,10 @@ const EditTaskDialog = ({
                               if (a.role !== 'supervisor') return false;
                               if (currentAssignees.some(c => c._id === a._id)) return false;
                               
-                              // Check if supervisor is assigned elsewhere
+                              // Check if supervisor is assigned elsewhere - safely using supervisorsMap
                               let isAssignedElsewhere = false;
-                              assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-                                if (supervisorIds.has(a._id) && siteId !== task.siteId) {
+                              supervisorsMap.forEach((supervisorIds, siteId) => {
+                                if (supervisorIds && supervisorIds.has && supervisorIds.has(a._id) && siteId !== task.siteId) {
                                   isAssignedElsewhere = true;
                                 }
                               });
@@ -2477,6 +2528,17 @@ const AddAssignTaskDialog = ({
   const [deadline, setDeadline] = useState("");
   const [dueDateTime, setDueDateTime] = useState("");
 
+  // Ensure assignedSupervisorsMap is a Map
+  const supervisorsMap = useMemo(() => {
+    if (!assignedSupervisorsMap) return new Map();
+    if (assignedSupervisorsMap instanceof Map) return assignedSupervisorsMap;
+    try {
+      return new Map(Object.entries(assignedSupervisorsMap));
+    } catch {
+      return new Map();
+    }
+  }, [assignedSupervisorsMap]);
+
   // Reset form
   const resetForm = () => {
     setTitle("");
@@ -2497,6 +2559,18 @@ const AddAssignTaskDialog = ({
     // Validate form
     if (!title || !description || !deadline || !dueDateTime) {
       toast.error("Please fill in all required fields");
+      return;
+    }
+
+    // Validate description word count
+    const wordCount = description.trim().split(/\s+/).filter(word => word.length > 0).length;
+    if (wordCount < 5) {
+      toast.error(`Description must be at least 5 words. Current: ${wordCount} words`);
+      return;
+    }
+
+    if (wordCount > 500) {
+      toast.error(`Description cannot exceed 500 words. Current: ${wordCount} words`);
       return;
     }
 
@@ -2545,7 +2619,7 @@ const AddAssignTaskDialog = ({
             <FormField label="Task Title" id="task-title" required>
               <Input 
                 id="task-title" 
-                name="task-title" 
+                name="title" 
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Enter task title" 
@@ -2559,10 +2633,28 @@ const AddAssignTaskDialog = ({
                 name="description" 
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Enter task description" 
+                placeholder="Enter task description (minimum 5 words)" 
                 rows={3}
                 required 
               />
+              <div className="mt-1 flex justify-between items-center">
+                <div className="text-xs text-muted-foreground">
+                  Word count: {description.trim() ? description.trim().split(/\s+/).filter(word => word.length > 0).length : 0} / 5 minimum
+                </div>
+                {description.trim() && (
+                  <div className="text-xs">
+                    {description.trim().split(/\s+/).filter(word => word.length > 0).length < 5 ? (
+                      <span className="text-amber-600">
+                        Need {5 - description.trim().split(/\s+/).filter(word => word.length > 0).length} more word(s)
+                      </span>
+                    ) : (
+                      <span className="text-green-600">
+                        ✓ Minimum word count met
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </FormField>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2624,7 +2716,7 @@ const AddAssignTaskDialog = ({
             <FormField label="Due Date & Time" id="due-datetime" required>
               <Input 
                 id="due-datetime" 
-                name="due-datetime" 
+                name="dueDateTime" 
                 type="datetime-local" 
                 value={dueDateTime}
                 onChange={(e) => setDueDateTime(e.target.value)}
@@ -2651,7 +2743,7 @@ const AddAssignTaskDialog = ({
               isLoading={isLoadingAssignees}
               selectedSites={selectedSites}
               sites={sites}
-              assignedSupervisorsMap={assignedSupervisorsMap}
+              assignedSupervisorsMap={supervisorsMap}
               siteStaffingRequirements={siteStaffingRequirements}
             />
 
@@ -2806,7 +2898,7 @@ const TasksSection = () => {
   useEffect(() => {
     const fetchAssignedSupervisors = async () => {
       try {
-        const map = await taskService.getSupervisorsBySite();
+        const map = await taskService.getSupervisorsBySiteOld();
         setAssignedSupervisorsMap(map);
       } catch (error) {
         console.error("Error fetching assigned supervisors:", error);
@@ -2881,7 +2973,7 @@ const TasksSection = () => {
           missingRoles,
           isManagerRequirementMet: assignedManagers >= requiredManagers,
           isSupervisorRequirementMet: assignedSupervisors >= requiredSupervisors,
-          hasAnyAssignee: assignedManagers > 0 || assignedSupervisors > 0 // Added this field
+          hasAnyAssignee: assignedManagers > 0 || assignedSupervisors > 0
         });
       });
       
@@ -3242,637 +3334,634 @@ const TasksSection = () => {
     return groupTasks(uniqueTasks);
   }, [tasks, searchQuery, selectedSite, groupTasks]);
 
-  // Create tasks for sites - FIXED: Now handles fully staffed sites without requiring assignees
   // Create tasks for sites - COMPLETE FUNCTION with all validations
-const createTasksForSites = async (
-  taskTitle: string, 
-  taskDescription: string, 
-  taskPriority: "high" | "medium" | "low",
-  taskType: string,
-  taskDeadline: string,
-  taskDueDateTime: string,
-  assigneeIds: string[],
-  siteIds: string[]
-) => {
-  console.log("📋 createTasksForSites called with:", {
-    taskTitle,
-    taskDescription,
-    taskPriority,
-    taskType,
-    taskDeadline,
-    taskDueDateTime,
-    assigneeIds,
-    siteIds,
-    assigneeCount: assigneeIds?.length || 0,
-    siteCount: siteIds?.length || 0
-  });
+  const createTasksForSites = async (
+    taskTitle: string, 
+    taskDescription: string, 
+    taskPriority: "high" | "medium" | "low",
+    taskType: string,
+    taskDeadline: string,
+    taskDueDateTime: string,
+    assigneeIds: string[],
+    siteIds: string[]
+  ) => {
+    console.log("📋 createTasksForSites called with:", {
+      taskTitle,
+      taskDescription,
+      taskPriority,
+      taskType,
+      taskDeadline,
+      taskDueDateTime,
+      assigneeIds,
+      siteIds,
+      assigneeCount: assigneeIds?.length || 0,
+      siteCount: siteIds?.length || 0
+    });
 
-  // Validate inputs
-  if (!siteIds || siteIds.length === 0) {
-    toast.error("❌ No sites selected for task creation");
-    return false;
-  }
+    // Validate inputs
+    if (!siteIds || siteIds.length === 0) {
+      toast.error("❌ No sites selected for task creation");
+      return false;
+    }
 
-  // Trim and validate title
-  const trimmedTitle = taskTitle?.trim() || "";
-  if (!trimmedTitle) {
-    toast.error("❌ Task title is empty after trimming");
-    return false;
-  }
-  
-  if (trimmedTitle.length < 5) {
-    toast.error(`❌ Task title must be at least 5 characters. Current: ${trimmedTitle.length} characters`);
-    return false;
-  }
-
-  // Trim and validate description
-  const trimmedDescription = taskDescription?.trim() || "";
-  if (!trimmedDescription) {
-    toast.error("❌ Task description is empty after trimming");
-    return false;
-  }
-  
-  // Count words in description
-  const words = trimmedDescription.split(/\s+/).filter(word => word.length > 0);
-  const wordCount = words.length;
-  
-  console.log("📝 Description word count:", wordCount);
-  console.log("📝 Words:", words);
-
-  if (wordCount < 5) {
-    toast.error(`❌ Task description must be at least 5 words. Current: ${wordCount} words`);
-    return false;
-  }
-
-  if (wordCount > 500) {
-    toast.error(`❌ Task description cannot exceed 500 words. Current: ${wordCount} words`);
-    return false;
-  }
-
-  // Validate dates
-  if (!taskDeadline) {
-    toast.error("❌ Deadline date is required");
-    return false;
-  }
-
-  if (!taskDueDateTime) {
-    toast.error("❌ Due date & time is required");
-    return false;
-  }
-
-  // Check if deadline is in the past
-  const today = new Date().toISOString().split('T')[0];
-  if (taskDeadline < today) {
-    toast.error("❌ Deadline cannot be in the past");
-    return false;
-  }
-
-  // Get selected assignee objects (if any)
-  const selectedAssigneeObjects = assignees.filter(assignee => 
-    assigneeIds.includes(assignee._id)
-  );
-  console.log("👥 Selected assignee objects:", selectedAssigneeObjects.map(a => ({
-    id: a._id,
-    name: a.name,
-    role: a.role
-  })));
-
-  // Get selected sites
-  const selectedSiteObjects = sites.filter(site => 
-    siteIds.includes(site._id)
-  );
-  console.log("🏢 Selected site objects:", selectedSiteObjects.map(s => ({
-    id: s._id,
-    name: s.name,
-    managerCount: s.managerCount,
-    supervisorCount: s.supervisorCount
-  })));
-
-  if (selectedSiteObjects.length === 0) {
-    toast.error("❌ No valid sites found for the selected IDs");
-    return false;
-  }
-
-  // Check for supervisor assignment conflicts (only if we're assigning new supervisors)
-  if (selectedAssigneeObjects.length > 0) {
-    const supervisorConflicts: string[] = [];
-    const validAssignees: Assignee[] = [];
+    // Trim and validate title
+    const trimmedTitle = taskTitle?.trim() || "";
+    if (!trimmedTitle) {
+      toast.error("❌ Task title is empty after trimming");
+      return false;
+    }
     
-    selectedAssigneeObjects.forEach(assignee => {
-      if (assignee.role === 'supervisor') {
-        // Check if this supervisor is already assigned to any site
-        let isAssignedElsewhere = false;
-        let assignedSiteNames: string[] = [];
-        
-        assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
-          if (supervisorIds.has(assignee._id)) {
-            isAssignedElsewhere = true;
-            const site = sites.find(s => s._id === siteId);
-            if (site) {
-              assignedSiteNames.push(site.name);
+    if (trimmedTitle.length < 5) {
+      toast.error(`❌ Task title must be at least 5 characters. Current: ${trimmedTitle.length} characters`);
+      return false;
+    }
+
+    // Trim and validate description
+    const trimmedDescription = taskDescription?.trim() || "";
+    if (!trimmedDescription) {
+      toast.error("❌ Task description is empty after trimming");
+      return false;
+    }
+    
+    // Count words in description
+    const words = trimmedDescription.split(/\s+/).filter(word => word.length > 0);
+    const wordCount = words.length;
+    
+    console.log("📝 Description word count:", wordCount);
+
+    if (wordCount < 5) {
+      toast.error(`❌ Task description must be at least 5 words. Current: ${wordCount} words`);
+      return false;
+    }
+
+    if (wordCount > 500) {
+      toast.error(`❌ Task description cannot exceed 500 words. Current: ${wordCount} words`);
+      return false;
+    }
+
+    // Validate dates
+    if (!taskDeadline) {
+      toast.error("❌ Deadline date is required");
+      return false;
+    }
+
+    if (!taskDueDateTime) {
+      toast.error("❌ Due date & time is required");
+      return false;
+    }
+
+    // Check if deadline is in the past
+    const today = new Date().toISOString().split('T')[0];
+    if (taskDeadline < today) {
+      toast.error("❌ Deadline cannot be in the past");
+      return false;
+    }
+
+    // Get selected assignee objects (if any)
+    const selectedAssigneeObjects = assignees.filter(assignee => 
+      assigneeIds.includes(assignee._id)
+    );
+    console.log("👥 Selected assignee objects:", selectedAssigneeObjects.map(a => ({
+      id: a._id,
+      name: a.name,
+      role: a.role
+    })));
+
+    // Get selected sites
+    const selectedSiteObjects = sites.filter(site => 
+      siteIds.includes(site._id)
+    );
+    console.log("🏢 Selected site objects:", selectedSiteObjects.map(s => ({
+      id: s._id,
+      name: s.name,
+      managerCount: s.managerCount,
+      supervisorCount: s.supervisorCount
+    })));
+
+    if (selectedSiteObjects.length === 0) {
+      toast.error("❌ No valid sites found for the selected IDs");
+      return false;
+    }
+
+    // Check for supervisor assignment conflicts (only if we're assigning new supervisors)
+    if (selectedAssigneeObjects.length > 0) {
+      const supervisorConflicts: string[] = [];
+      const validAssignees: Assignee[] = [];
+      
+      selectedAssigneeObjects.forEach(assignee => {
+        if (assignee.role === 'supervisor') {
+          // Check if this supervisor is already assigned to any site
+          let isAssignedElsewhere = false;
+          let assignedSiteNames: string[] = [];
+          
+          assignedSupervisorsMap.forEach((supervisorIds, siteId) => {
+            if (supervisorIds && supervisorIds.has && supervisorIds.has(assignee._id)) {
+              isAssignedElsewhere = true;
+              const site = sites.find(s => s._id === siteId);
+              if (site) {
+                assignedSiteNames.push(site.name);
+              }
             }
+          });
+          
+          if (isAssignedElsewhere) {
+            supervisorConflicts.push(`${assignee.name} (already assigned to: ${assignedSiteNames.join(', ')})`);
+          } else {
+            validAssignees.push(assignee);
           }
-        });
-        
-        if (isAssignedElsewhere) {
-          supervisorConflicts.push(`${assignee.name} (already assigned to: ${assignedSiteNames.join(', ')})`);
         } else {
+          // Managers are always valid
           validAssignees.push(assignee);
         }
-      } else {
-        // Managers are always valid
-        validAssignees.push(assignee);
-      }
-    });
-
-    if (supervisorConflicts.length > 0) {
-      toast.error(
-        <div>
-          <p className="font-bold">❌ Supervisor assignment conflict:</p>
-          <ul className="list-disc pl-4 mt-1">
-            {supervisorConflicts.map((conflict, i) => (
-              <li key={i}>{conflict}</li>
-            ))}
-          </ul>
-          <p className="mt-2">Supervisors can only be assigned to ONE site.</p>
-        </div>
-      );
-      return false;
-    }
-  }
-
-  // Create tasks for EACH SITE
-  const tasksToCreate: any[] = [];
-  const skippedSites: string[] = [];
-  const siteWarnings: string[] = [];
-  
-  for (const site of selectedSiteObjects) {
-    console.log(`🔍 Processing site: ${site.name} (${site._id})`);
-    
-    // Check site staffing requirements
-    const requirements = siteStaffingRequirements.get(site._id);
-    
-    if (requirements) {
-      console.log(`📊 Site ${site.name} requirements:`, {
-        requiredManagers: requirements.requiredManagers,
-        requiredSupervisors: requirements.requiredSupervisors,
-        assignedManagers: requirements.assignedManagers,
-        assignedSupervisors: requirements.assignedSupervisors,
-        hasAnyAssignee: requirements.hasAnyAssignee,
-        isManagerRequirementMet: requirements.isManagerRequirementMet,
-        isSupervisorRequirementMet: requirements.isSupervisorRequirementMet
       });
-      
-      // If site is fully staffed, skip it (don't create tasks for fully staffed sites)
-      if (requirements.isManagerRequirementMet && requirements.isSupervisorRequirementMet) {
-        skippedSites.push(`${site.name} (fully staffed)`);
-        continue;
-      }
-      
-      // If site already has assignees, skip it
-      if (requirements.hasAnyAssignee) {
-        skippedSites.push(`${site.name} (already has assignees)`);
-        continue;
-      }
-      
-      // If site needs assignees but none selected, skip this site
-      if (selectedAssigneeObjects.length === 0) {
-        skippedSites.push(`${site.name} (needs staffing)`);
-        continue;
-      }
-      
-      // Calculate if adding these assignees would exceed limits
-      const managersToAdd = selectedAssigneeObjects.filter(a => a.role === 'manager').length;
-      const supervisorsToAdd = selectedAssigneeObjects.filter(a => a.role === 'supervisor').length;
-      
-      const totalManagersAfterAdd = requirements.assignedManagers + managersToAdd;
-      const totalSupervisorsAfterAdd = requirements.assignedSupervisors + supervisorsToAdd;
-      
-      if (totalManagersAfterAdd > requirements.requiredManagers) {
-        const warning = `Site ${site.name}: Already has ${requirements.assignedManagers} managers. Adding ${managersToAdd} more would exceed limit of ${requirements.requiredManagers}.`;
-        siteWarnings.push(warning);
-        continue;
-      }
-      
-      if (totalSupervisorsAfterAdd > requirements.requiredSupervisors) {
-        const warning = `Site ${site.name}: Already has ${requirements.assignedSupervisors} supervisors. Adding ${supervisorsToAdd} more would exceed limit of ${requirements.requiredSupervisors}.`;
-        siteWarnings.push(warning);
-        continue;
-      }
-      
-      // Create task with assignees
-      const assignedUsers = selectedAssigneeObjects.map(assignee => ({
-        userId: assignee._id,
-        name: assignee.name,
-        role: assignee.role,
-        assignedAt: new Date().toISOString(),
-        status: 'pending' as const
-      }));
-      
-      const taskData = {
-        title: trimmedTitle,
-        description: trimmedDescription,
-        assignedUsers: assignedUsers,
-        priority: taskPriority,
-        status: "pending" as const,
-        deadline: taskDeadline,
-        dueDateTime: taskDueDateTime,
-        siteId: site._id,
-        siteName: site.name,
-        clientName: site.clientName || "Unknown Client",
-        taskType: taskType || "routine",
-        attachments: [],
-        hourlyUpdates: [],
-        createdBy: "current-user"
-      };
-      
-      console.log(`✅ Adding task for site ${site.name}:`, taskData);
-      tasksToCreate.push(taskData);
-    } else {
-      console.log(`ℹ️ No requirements found for site ${site.name}, creating without checks`);
-      
-      // If no requirements found, create task without assignee checks
-      const assignedUsers = selectedAssigneeObjects.map(assignee => ({
-        userId: assignee._id,
-        name: assignee.name,
-        role: assignee.role,
-        assignedAt: new Date().toISOString(),
-        status: 'pending' as const
-      }));
-      
-      const taskData = {
-        title: trimmedTitle,
-        description: trimmedDescription,
-        assignedUsers: assignedUsers,
-        priority: taskPriority,
-        status: "pending" as const,
-        deadline: taskDeadline,
-        dueDateTime: taskDueDateTime,
-        siteId: site._id,
-        siteName: site.name,
-        clientName: site.clientName || "Unknown Client",
-        taskType: taskType || "routine",
-        attachments: [],
-        hourlyUpdates: [],
-        createdBy: "current-user"
-      };
-      
-      console.log(`✅ Adding task for site ${site.name} (no requirements):`, taskData);
-      tasksToCreate.push(taskData);
-    }
-  }
 
-  console.log(`📊 Summary: ${tasksToCreate.length} tasks to create, ${skippedSites.length} sites skipped`);
-
-  // Show warnings if any
-  if (siteWarnings.length > 0) {
-    siteWarnings.forEach(warning => toast.warning(`⚠️ ${warning}`));
-  }
-
-  if (tasksToCreate.length === 0) {
-    if (skippedSites.length > 0) {
-      toast.warning(`⚠️ No tasks created. Issues with: ${skippedSites.join(', ')}`);
-    } else {
-      toast.warning("⚠️ No sites available for assignment.");
-    }
-    return false;
-  }
-
-  try {
-    console.log("📤 Sending to API:", JSON.stringify({ 
-      tasks: tasksToCreate.map(t => ({
-        ...t,
-        description: t.description.substring(0, 50) + "..." // Log truncated description
-      })), 
-      createdBy: "current-user" 
-    }, null, 2));
-    
-    const createMultipleTasksRequest = {
-      tasks: tasksToCreate,
-      createdBy: "current-user"
-    };
-
-    // Log the full request for debugging (but truncate long fields)
-    console.log("📦 Full request data:", {
-      taskCount: tasksToCreate.length,
-      firstTask: {
-        title: tasksToCreate[0]?.title,
-        descriptionLength: tasksToCreate[0]?.description?.length,
-        wordCount: tasksToCreate[0]?.description?.split(/\s+/).filter((w: string) => w.length > 0).length,
-        siteId: tasksToCreate[0]?.siteId,
-        assigneeCount: tasksToCreate[0]?.assignedUsers?.length
+      if (supervisorConflicts.length > 0) {
+        toast.error(
+          <div>
+            <p className="font-bold">❌ Supervisor assignment conflict:</p>
+            <ul className="list-disc pl-4 mt-1">
+              {supervisorConflicts.map((conflict, i) => (
+                <li key={i}>{conflict}</li>
+              ))}
+            </ul>
+            <p className="mt-2">Supervisors can only be assigned to ONE site.</p>
+          </div>
+        );
+        return false;
       }
-    });
+    }
 
-    const createdTasks = await taskService.createMultipleTasks(createMultipleTasksRequest);
-    console.log("📥 API response:", createdTasks);
+    // Create tasks for EACH SITE
+    const tasksToCreate: any[] = [];
+    const skippedSites: string[] = [];
+    const siteWarnings: string[] = [];
     
-    // Check if tasks were actually created
-    if (!createdTasks) {
-      toast.error("❌ API returned no data - tasks may not have been created");
-      return false;
-    }
-    
-    if (!Array.isArray(createdTasks)) {
-      toast.error(`❌ API returned unexpected data type: ${typeof createdTasks}`);
-      console.error("Unexpected response type:", createdTasks);
-      return false;
-    }
-    
-    if (createdTasks.length === 0) {
-      toast.error("❌ API returned empty array - tasks were not created");
-      return false;
-    }
-    
-    const managerCount = selectedAssigneeObjects.filter(a => a.role === 'manager').length;
-    const supervisorCount = selectedAssigneeObjects.filter(a => a.role === 'supervisor').length;
-    
-    let successMessage = `✅ Successfully created ${createdTasks.length} task(s)`;
-    
-    if (selectedAssigneeObjects.length > 0) {
-      successMessage += ` with ${selectedAssigneeObjects.length} assignee(s) (${managerCount}M, ${supervisorCount}S)`;
-    } else {
-      successMessage += ` (no assignees)`;
-    }
-    
-    successMessage += ` across ${siteIds.length} site(s)!`;
-    
-    if (skippedSites.length > 0) {
-      successMessage += ` ${skippedSites.length} site(s) were skipped: ${skippedSites.join(', ')}.`;
-    }
-    
-    toast.success(successMessage);
-    
-    // Refresh tasks list
-    await fetchTasks();
-    
-    return true;
-    
-  } catch (error: any) {
-    console.error("❌ Error creating tasks:", error);
-    
-    // Show more detailed error message
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      console.error("❌ Error response data:", error.response.data);
-      console.error("❌ Error response status:", error.response.status);
+    for (const site of selectedSiteObjects) {
+      console.log(`🔍 Processing site: ${site.name} (${site._id})`);
       
-      let errorMessage = "Unknown server error";
+      // Check site staffing requirements
+      const requirements = siteStaffingRequirements.get(site._id);
       
-      if (error.response.data) {
-        if (typeof error.response.data === 'string') {
-          errorMessage = error.response.data;
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
-        } else if (error.response.data.error) {
-          errorMessage = error.response.data.error;
-        } else {
-          errorMessage = JSON.stringify(error.response.data);
+      if (requirements) {
+        console.log(`📊 Site ${site.name} requirements:`, {
+          requiredManagers: requirements.requiredManagers,
+          requiredSupervisors: requirements.requiredSupervisors,
+          assignedManagers: requirements.assignedManagers,
+          assignedSupervisors: requirements.assignedSupervisors,
+          hasAnyAssignee: requirements.hasAnyAssignee,
+          isManagerRequirementMet: requirements.isManagerRequirementMet,
+          isSupervisorRequirementMet: requirements.isSupervisorRequirementMet
+        });
+        
+        // If site is fully staffed, skip it (don't create tasks for fully staffed sites)
+        if (requirements.isManagerRequirementMet && requirements.isSupervisorRequirementMet) {
+          skippedSites.push(`${site.name} (fully staffed)`);
+          continue;
         }
+        
+        // If site already has assignees, skip it
+        if (requirements.hasAnyAssignee) {
+          skippedSites.push(`${site.name} (already has assignees)`);
+          continue;
+        }
+        
+        // If site needs assignees but none selected, skip this site
+        if (selectedAssigneeObjects.length === 0) {
+          skippedSites.push(`${site.name} (needs staffing)`);
+          continue;
+        }
+        
+        // Calculate if adding these assignees would exceed limits
+        const managersToAdd = selectedAssigneeObjects.filter(a => a.role === 'manager').length;
+        const supervisorsToAdd = selectedAssigneeObjects.filter(a => a.role === 'supervisor').length;
+        
+        const totalManagersAfterAdd = requirements.assignedManagers + managersToAdd;
+        const totalSupervisorsAfterAdd = requirements.assignedSupervisors + supervisorsToAdd;
+        
+        if (totalManagersAfterAdd > requirements.requiredManagers) {
+          const warning = `Site ${site.name}: Already has ${requirements.assignedManagers} managers. Adding ${managersToAdd} more would exceed limit of ${requirements.requiredManagers}.`;
+          siteWarnings.push(warning);
+          continue;
+        }
+        
+        if (totalSupervisorsAfterAdd > requirements.requiredSupervisors) {
+          const warning = `Site ${site.name}: Already has ${requirements.assignedSupervisors} supervisors. Adding ${supervisorsToAdd} more would exceed limit of ${requirements.requiredSupervisors}.`;
+          siteWarnings.push(warning);
+          continue;
+        }
+        
+        // Create task with assignees
+        const assignedUsers = selectedAssigneeObjects.map(assignee => ({
+          userId: assignee._id,
+          name: assignee.name,
+          role: assignee.role,
+          assignedAt: new Date().toISOString(),
+          status: 'pending' as const
+        }));
+        
+        const taskData = {
+          title: trimmedTitle,
+          description: trimmedDescription,
+          assignedUsers: assignedUsers,
+          priority: taskPriority,
+          status: "pending" as const,
+          deadline: taskDeadline,
+          dueDateTime: taskDueDateTime,
+          siteId: site._id,
+          siteName: site.name,
+          clientName: site.clientName || "Unknown Client",
+          taskType: taskType || "routine",
+          attachments: [],
+          hourlyUpdates: [],
+          createdBy: "current-user"
+        };
+        
+        console.log(`✅ Adding task for site ${site.name}:`, taskData);
+        tasksToCreate.push(taskData);
+      } else {
+        console.log(`ℹ️ No requirements found for site ${site.name}, creating without checks`);
+        
+        // If no requirements found, create task without assignee checks
+        const assignedUsers = selectedAssigneeObjects.map(assignee => ({
+          userId: assignee._id,
+          name: assignee.name,
+          role: assignee.role,
+          assignedAt: new Date().toISOString(),
+          status: 'pending' as const
+        }));
+        
+        const taskData = {
+          title: trimmedTitle,
+          description: trimmedDescription,
+          assignedUsers: assignedUsers,
+          priority: taskPriority,
+          status: "pending" as const,
+          deadline: taskDeadline,
+          dueDateTime: taskDueDateTime,
+          siteId: site._id,
+          siteName: site.name,
+          clientName: site.clientName || "Unknown Client",
+          taskType: taskType || "routine",
+          attachments: [],
+          hourlyUpdates: [],
+          createdBy: "current-user"
+        };
+        
+        console.log(`✅ Adding task for site ${site.name} (no requirements):`, taskData);
+        tasksToCreate.push(taskData);
+      }
+    }
+
+    console.log(`📊 Summary: ${tasksToCreate.length} tasks to create, ${skippedSites.length} sites skipped`);
+
+    // Show warnings if any
+    if (siteWarnings.length > 0) {
+      siteWarnings.forEach(warning => toast.warning(`⚠️ ${warning}`));
+    }
+
+    if (tasksToCreate.length === 0) {
+      if (skippedSites.length > 0) {
+        toast.warning(`⚠️ No tasks created. Issues with: ${skippedSites.join(', ')}`);
+      } else {
+        toast.warning("⚠️ No sites available for assignment.");
+      }
+      return false;
+    }
+
+    try {
+      console.log("📤 Sending to API:", JSON.stringify({ 
+        tasks: tasksToCreate.map(t => ({
+          ...t,
+          description: t.description.substring(0, 50) + "..." // Log truncated description
+        })), 
+        createdBy: "current-user" 
+      }, null, 2));
+      
+      const createMultipleTasksRequest = {
+        tasks: tasksToCreate,
+        createdBy: "current-user"
+      };
+
+      // Log the full request for debugging (but truncate long fields)
+      console.log("📦 Full request data:", {
+        taskCount: tasksToCreate.length,
+        firstTask: {
+          title: tasksToCreate[0]?.title,
+          descriptionLength: tasksToCreate[0]?.description?.length,
+          wordCount: tasksToCreate[0]?.description?.split(/\s+/).filter((w: string) => w.length > 0).length,
+          siteId: tasksToCreate[0]?.siteId,
+          assigneeCount: tasksToCreate[0]?.assignedUsers?.length
+        }
+      });
+
+      const createdTasks = await taskService.createMultipleTasks(createMultipleTasksRequest);
+      console.log("📥 API response:", createdTasks);
+      
+      // Check if tasks were actually created
+      if (!createdTasks) {
+        toast.error("❌ API returned no data - tasks may not have been created");
+        return false;
       }
       
-      toast.error(`❌ Server error (${error.response.status}): ${errorMessage}`);
+      if (!Array.isArray(createdTasks)) {
+        toast.error(`❌ API returned unexpected data type: ${typeof createdTasks}`);
+        console.error("Unexpected response type:", createdTasks);
+        return false;
+      }
       
-    } else if (error.request) {
-      // The request was made but no response was received
-      console.error("❌ No response received:", error.request);
-      toast.error("❌ No response from server. Please check your network connection.");
+      if (createdTasks.length === 0) {
+        toast.error("❌ API returned empty array - tasks were not created");
+        return false;
+      }
       
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      console.error("❌ Error message:", error.message);
-      toast.error(`❌ Request error: ${error.message}`);
+      const managerCount = selectedAssigneeObjects.filter(a => a.role === 'manager').length;
+      const supervisorCount = selectedAssigneeObjects.filter(a => a.role === 'supervisor').length;
+      
+      let successMessage = `✅ Successfully created ${createdTasks.length} task(s)`;
+      
+      if (selectedAssigneeObjects.length > 0) {
+        successMessage += ` with ${selectedAssigneeObjects.length} assignee(s) (${managerCount}M, ${supervisorCount}S)`;
+      } else {
+        successMessage += ` (no assignees)`;
+      }
+      
+      successMessage += ` across ${siteIds.length} site(s)!`;
+      
+      if (skippedSites.length > 0) {
+        successMessage += ` ${skippedSites.length} site(s) were skipped: ${skippedSites.join(', ')}.`;
+      }
+      
+      toast.success(successMessage);
+      
+      // Refresh tasks list
+      await fetchTasks();
+      
+      return true;
+      
+    } catch (error: any) {
+      console.error("❌ Error creating tasks:", error);
+      
+      // Show more detailed error message
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error("❌ Error response data:", error.response.data);
+        console.error("❌ Error response status:", error.response.status);
+        
+        let errorMessage = "Unknown server error";
+        
+        if (error.response.data) {
+          if (typeof error.response.data === 'string') {
+            errorMessage = error.response.data;
+          } else if (error.response.data.message) {
+            errorMessage = error.response.data.message;
+          } else if (error.response.data.error) {
+            errorMessage = error.response.data.error;
+          } else {
+            errorMessage = JSON.stringify(error.response.data);
+          }
+        }
+        
+        toast.error(`❌ Server error (${error.response.status}): ${errorMessage}`);
+        
+      } else if (error.request) {
+        // The request was made but no response was received
+        console.error("❌ No response received:", error.request);
+        toast.error("❌ No response from server. Please check your network connection.");
+        
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error("❌ Error message:", error.message);
+        toast.error(`❌ Request error: ${error.message}`);
+      }
+      
+      return false;
     }
-    
-    return false;
-  }
-};
+  };
 
   // Handle unified submit
-  // Handle unified submit - FIXED with minimum word count validation
-const handleUnifiedSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-  e.preventDefault();
-  
-  const formData = new FormData(e.currentTarget);
-  const title = formData.get("title") as string;
-  const description = formData.get("description") as string;
-  const priority = formData.get("priority") as "high" | "medium" | "low";
-  const taskType = formData.get("taskType") as string || "routine";
-  const deadline = formData.get("deadline") as string;
-  const dueDateTime = formData.get("dueDateTime") as string;
-  const selectedSitesStr = formData.get("selectedSites") as string;
-  const selectedAssigneesStr = formData.get("selectedAssignees") as string;
-  
-  console.log("Form data received:", {
-    title,
-    description,
-    priority,
-    taskType,
-    deadline,
-    dueDateTime,
-    selectedSitesStr,
-    selectedAssigneesStr
-  });
-
-  // Validate required fields
-  if (!title) {
-    toast.error("❌ Task title is missing from form");
-    return;
-  }
-  
-  if (!title.trim()) {
-    toast.error("❌ Task title cannot be empty or just spaces");
-    return;
-  }
-  
-  if (title.trim().length < 5) {
-    toast.error("❌ Task title must be at least 5 characters long");
-    return;
-  }
-  
-  if (!description) {
-    toast.error("❌ Task description is missing from form");
-    return;
-  }
-  
-  if (!description.trim()) {
-    toast.error("❌ Task description cannot be empty or just spaces");
-    return;
-  }
-  
-  // Count words in description
-  const wordCount = description.trim().split(/\s+/).filter(word => word.length > 0).length;
-  console.log("Description word count:", wordCount);
-  
-  if (wordCount < 5) {
-    toast.error(`❌ Task description must be at least 5 words. Current: ${wordCount} words`);
-    return;
-  }
-  
-  if (wordCount > 500) {
-    toast.error(`❌ Task description cannot exceed 500 words. Current: ${wordCount} words`);
-    return;
-  }
-  
-  if (!deadline) {
-    toast.error("❌ Deadline date is missing from form");
-    return;
-  }
-  
-  if (!dueDateTime) {
-    toast.error("❌ Due date & time is missing from form");
-    return;
-  }
-  
-  // Parse JSON strings safely
-  let siteIds: string[] = [];
-  let assigneeIds: string[] = [];
-  
-  try {
-    siteIds = JSON.parse(selectedSitesStr) as string[];
-    console.log("Parsed site IDs:", siteIds);
-  } catch (error) {
-    console.error("Error parsing site IDs:", error);
-    toast.error(`❌ Invalid site selection data: ${error.message}`);
-    return;
-  }
-  
-  try {
-    if (selectedAssigneesStr && selectedAssigneesStr !== "[]") {
-      assigneeIds = JSON.parse(selectedAssigneesStr) as string[];
-      console.log("Parsed assignee IDs:", assigneeIds);
-    } else {
-      console.log("No assignees selected");
-      assigneeIds = [];
-    }
-  } catch (error) {
-    console.error("Error parsing assignee IDs:", error);
-    toast.error(`❌ Invalid assignee selection data: ${error.message}`);
-    return;
-  }
-
-  if (siteIds.length === 0) {
-    toast.error("❌ Please select at least one site - site selection is empty");
-    return;
-  }
-
-  // Log the final data being submitted
-  console.log("Submitting task with data:", {
-    title: title.trim(),
-    description: description.trim(),
-    wordCount,
-    priority,
-    taskType,
-    deadline,
-    dueDateTime,
-    siteIds,
-    assigneeIds,
-    assigneeCount: assigneeIds.length
-  });
-
-  // Check each selected site's staffing requirements
-  const sitesNeedingAssignees: string[] = [];
-  const sitesFullyStaffed: string[] = [];
-  const sitesWithAssignees: string[] = [];
-  
-  siteIds.forEach(siteId => {
-    const requirements = siteStaffingRequirements.get(siteId);
-    if (requirements) {
-      const missingManagers = requirements.requiredManagers - requirements.assignedManagers;
-      const missingSupervisors = requirements.requiredSupervisors - requirements.assignedSupervisors;
-      
-      if (requirements.hasAnyAssignee) {
-        sitesWithAssignees.push(requirements.siteName);
-      } else if (missingManagers > 0 || missingSupervisors > 0) {
-        sitesNeedingAssignees.push(`${requirements.siteName} (needs ${missingManagers}M, ${missingSupervisors}S)`);
-      } else {
-        sitesFullyStaffed.push(requirements.siteName);
-      }
-    }
-  });
-
-  // If there are sites with assignees, show warning and filter them out
-  if (sitesWithAssignees.length > 0) {
-    toast.warning(
-      <div>
-        <p className="font-bold mb-2">⚠️ The following sites already have assignees and will be skipped:</p>
-        <ul className="list-disc pl-4 mb-3">
-          {sitesWithAssignees.map((site, i) => (
-            <li key={i}>{site}</li>
-          ))}
-        </ul>
-      </div>
-    );
+  const handleUnifiedSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
     
-    // Filter out sites that already have assignees
-    const filteredSiteIds = siteIds.filter(siteId => {
-      const requirements = siteStaffingRequirements.get(siteId);
-      return requirements && !requirements.hasAnyAssignee;
+    const formData = new FormData(e.currentTarget);
+    const title = formData.get("title") as string;
+    const description = formData.get("description") as string;
+    const priority = formData.get("priority") as "high" | "medium" | "low";
+    const taskType = formData.get("taskType") as string || "routine";
+    const deadline = formData.get("deadline") as string;
+    const dueDateTime = formData.get("dueDateTime") as string;
+    const selectedSitesStr = formData.get("selectedSites") as string;
+    const selectedAssigneesStr = formData.get("selectedAssignees") as string;
+    
+    console.log("Form data received:", {
+      title,
+      description,
+      priority,
+      taskType,
+      deadline,
+      dueDateTime,
+      selectedSitesStr,
+      selectedAssigneesStr
     });
-    
-    if (filteredSiteIds.length === 0) {
-      toast.error("❌ No valid sites remaining after filtering out sites with assignees.");
+
+    // Validate required fields
+    if (!title) {
+      toast.error("❌ Task title is missing from form");
       return;
     }
     
-    siteIds = filteredSiteIds;
-  }
+    if (!title.trim()) {
+      toast.error("❌ Task title cannot be empty or just spaces");
+      return;
+    }
+    
+    if (title.trim().length < 5) {
+      toast.error("❌ Task title must be at least 5 characters long");
+      return;
+    }
+    
+    if (!description) {
+      toast.error("❌ Task description is missing from form");
+      return;
+    }
+    
+    if (!description.trim()) {
+      toast.error("❌ Task description cannot be empty or just spaces");
+      return;
+    }
+    
+    // Count words in description
+    const wordCount = description.trim().split(/\s+/).filter(word => word.length > 0).length;
+    console.log("Description word count:", wordCount);
+    
+    if (wordCount < 5) {
+      toast.error(`❌ Task description must be at least 5 words. Current: ${wordCount} words`);
+      return;
+    }
+    
+    if (wordCount > 500) {
+      toast.error(`❌ Task description cannot exceed 500 words. Current: ${wordCount} words`);
+      return;
+    }
+    
+    if (!deadline) {
+      toast.error("❌ Deadline date is missing from form");
+      return;
+    }
+    
+    if (!dueDateTime) {
+      toast.error("❌ Due date & time is missing from form");
+      return;
+    }
+    
+    // Parse JSON strings safely
+    let siteIds: string[] = [];
+    let assigneeIds: string[] = [];
+    
+    try {
+      siteIds = JSON.parse(selectedSitesStr) as string[];
+      console.log("Parsed site IDs:", siteIds);
+    } catch (error) {
+      console.error("Error parsing site IDs:", error);
+      toast.error(`❌ Invalid site selection data: ${error.message}`);
+      return;
+    }
+    
+    try {
+      if (selectedAssigneesStr && selectedAssigneesStr !== "[]") {
+        assigneeIds = JSON.parse(selectedAssigneesStr) as string[];
+        console.log("Parsed assignee IDs:", assigneeIds);
+      } else {
+        console.log("No assignees selected");
+        assigneeIds = [];
+      }
+    } catch (error) {
+      console.error("Error parsing assignee IDs:", error);
+      toast.error(`❌ Invalid assignee selection data: ${error.message}`);
+      return;
+    }
 
-  // If there are sites needing assignees but no assignees selected
-  if (sitesNeedingAssignees.length > 0 && assigneeIds.length === 0) {
-    toast.error(
-      <div>
-        <p className="font-bold mb-2">❌ The following sites need staffing:</p>
-        <ul className="list-disc pl-4 mb-3">
-          {sitesNeedingAssignees.map((site, i) => (
-            <li key={i}>{site}</li>
-          ))}
-        </ul>
-        <p>Please select at least one manager or supervisor to assign to these sites.</p>
-      </div>
+    if (siteIds.length === 0) {
+      toast.error("❌ Please select at least one site - site selection is empty");
+      return;
+    }
+
+    // Log the final data being submitted
+    console.log("Submitting task with data:", {
+      title: title.trim(),
+      description: description.trim(),
+      wordCount,
+      priority,
+      taskType,
+      deadline,
+      dueDateTime,
+      siteIds,
+      assigneeIds,
+      assigneeCount: assigneeIds.length
+    });
+
+    // Check each selected site's staffing requirements
+    const sitesNeedingAssignees: string[] = [];
+    const sitesFullyStaffed: string[] = [];
+    const sitesWithAssignees: string[] = [];
+    
+    siteIds.forEach(siteId => {
+      const requirements = siteStaffingRequirements.get(siteId);
+      if (requirements) {
+        const missingManagers = requirements.requiredManagers - requirements.assignedManagers;
+        const missingSupervisors = requirements.requiredSupervisors - requirements.assignedSupervisors;
+        
+        if (requirements.hasAnyAssignee) {
+          sitesWithAssignees.push(requirements.siteName);
+        } else if (missingManagers > 0 || missingSupervisors > 0) {
+          sitesNeedingAssignees.push(`${requirements.siteName} (needs ${missingManagers}M, ${missingSupervisors}S)`);
+        } else {
+          sitesFullyStaffed.push(requirements.siteName);
+        }
+      }
+    });
+
+    // If there are sites with assignees, show warning and filter them out
+    if (sitesWithAssignees.length > 0) {
+      toast.warning(
+        <div>
+          <p className="font-bold mb-2">⚠️ The following sites already have assignees and will be skipped:</p>
+          <ul className="list-disc pl-4 mb-3">
+            {sitesWithAssignees.map((site, i) => (
+              <li key={i}>{site}</li>
+            ))}
+          </ul>
+        </div>
+      );
+      
+      // Filter out sites that already have assignees
+      const filteredSiteIds = siteIds.filter(siteId => {
+        const requirements = siteStaffingRequirements.get(siteId);
+        return requirements && !requirements.hasAnyAssignee;
+      });
+      
+      if (filteredSiteIds.length === 0) {
+        toast.error("❌ No valid sites remaining after filtering out sites with assignees.");
+        return;
+      }
+      
+      siteIds = filteredSiteIds;
+    }
+
+    // If there are sites needing assignees but no assignees selected
+    if (sitesNeedingAssignees.length > 0 && assigneeIds.length === 0) {
+      toast.error(
+        <div>
+          <p className="font-bold mb-2">❌ The following sites need staffing:</p>
+          <ul className="list-disc pl-4 mb-3">
+            {sitesNeedingAssignees.map((site, i) => (
+              <li key={i}>{site}</li>
+            ))}
+          </ul>
+          <p>Please select at least one manager or supervisor to assign to these sites.</p>
+        </div>
+      );
+      return;
+    }
+
+    // If all sites are fully staffed, show message and don't create tasks
+    if (sitesFullyStaffed.length === siteIds.length) {
+      toast.info("ℹ️ All selected sites are fully staffed. No tasks need to be created.");
+      return;
+    }
+
+    // If there are sites needing assignees and we have assignees selected, create tasks for those sites
+    const sitesToCreateTasks = siteIds.filter(siteId => {
+      const requirements = siteStaffingRequirements.get(siteId);
+      return requirements && !requirements.hasAnyAssignee && (!requirements.isManagerRequirementMet || !requirements.isSupervisorRequirementMet);
+    });
+
+    console.log("Sites to create tasks for:", sitesToCreateTasks);
+
+    const success = await createTasksForSites(
+      title.trim(), 
+      description.trim(), 
+      priority, 
+      taskType, 
+      deadline, 
+      dueDateTime, 
+      assigneeIds, 
+      sitesToCreateTasks
     );
-    return;
-  }
-
-  // If all sites are fully staffed, show message and don't create tasks
-  if (sitesFullyStaffed.length === siteIds.length) {
-    toast.info("ℹ️ All selected sites are fully staffed. No tasks need to be created.");
-    return;
-  }
-
-  // If there are sites needing assignees and we have assignees selected, create tasks for those sites
-  const sitesToCreateTasks = siteIds.filter(siteId => {
-    const requirements = siteStaffingRequirements.get(siteId);
-    return requirements && !requirements.hasAnyAssignee && (!requirements.isManagerRequirementMet || !requirements.isSupervisorRequirementMet);
-  });
-
-  console.log("Sites to create tasks for:", sitesToCreateTasks);
-
-  const success = await createTasksForSites(
-    title.trim(), 
-    description.trim(), 
-    priority, 
-    taskType, 
-    deadline, 
-    dueDateTime, 
-    assigneeIds, 
-    sitesToCreateTasks
-  );
-  
-  if (success) {
-    setAddAssignTaskDialogOpen(false);
-    setSelectedSites([]);
-    setSelectedAssignees([]);
-    setAssigneeType("all");
     
-    // Reset form inputs
-    const form = e.currentTarget;
-    form.reset();
-    
-    toast.success("✅ Tasks created successfully!");
-  }
-};
+    if (success) {
+      setAddAssignTaskDialogOpen(false);
+      setSelectedSites([]);
+      setSelectedAssignees([]);
+      setAssigneeType("all");
+      
+      // Reset form inputs
+      const form = e.currentTarget;
+      form.reset();
+      
+      toast.success("✅ Tasks created successfully!");
+    }
+  };
 
   // Handle edit task
   const handleEditTask = (task: Task) => {

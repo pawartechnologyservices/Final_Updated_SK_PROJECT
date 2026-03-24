@@ -1,6 +1,4 @@
-// src/services/assignTaskService.ts
-import { AssignedUser } from './TaskService';
-
+// services/assignTaskService.ts
 export interface AssignTask {
   _id: string;
   taskTitle: string;
@@ -14,38 +12,42 @@ export interface AssignTask {
   siteName: string;
   siteLocation: string;
   clientName: string;
-  assignedManagers: AssignedUser[];
-  assignedSupervisors: AssignedUser[];
+  assignedManagers: Array<{
+    userId: string;
+    name: string;
+    role: 'manager';
+    assignedAt: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+  }>;
+  assignedSupervisors: Array<{
+    userId: string;
+    name: string;
+    role: 'supervisor';
+    assignedAt: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+  }>;
   status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
   createdBy: string;
   createdByName: string;
   createdAt: string;
   updatedAt: string;
-  hourlyUpdates: HourlyUpdate[];
-  attachments: Attachment[];
-  completionNotes?: string;
-  completionPercentage: number;
+  completionPercentage?: number;
   isOverdue?: boolean;
-  daysUntilDue?: number;
-}
-
-export interface HourlyUpdate {
-  id: string;
-  timestamp: string;
-  content: string;
-  submittedBy: string;
-  submittedByName: string;
-}
-
-export interface Attachment {
-  id: string;
-  filename: string;
-  url: string;
-  uploadedAt: string;
-  size: number;
-  type: string;
-  uploadedBy: string;
-  uploadedByName: string;
+  hourlyUpdates?: Array<{
+    content: string;
+    timestamp: string;
+    submittedBy: string;
+    submittedByName: string;
+  }>;
+  attachments?: Array<{
+    filename: string;
+    url: string;
+    uploadedAt: string;
+    uploadedBy: string;
+    uploadedByName: string;
+    size: number;
+    type: string;
+  }>;
 }
 
 export interface CreateAssignTaskRequest {
@@ -60,8 +62,8 @@ export interface CreateAssignTaskRequest {
   siteName: string;
   siteLocation: string;
   clientName: string;
-  assignedManagers: Omit<AssignedUser, 'assignedAt' | 'status'>[];
-  assignedSupervisors: Omit<AssignedUser, 'assignedAt' | 'status'>[];
+  assignedManagers: Array<{ userId: string; name: string; role: 'manager' }>;
+  assignedSupervisors: Array<{ userId: string; name: string; role: 'supervisor' }>;
   createdBy: string;
   createdByName: string;
 }
@@ -74,517 +76,537 @@ export interface UpdateAssignTaskRequest {
   dueDateTime?: string;
   priority?: 'high' | 'medium' | 'low';
   taskType?: string;
-  siteId?: string;
-  siteName?: string;
-  siteLocation?: string;
-  clientName?: string;
-  assignedManagers?: AssignedUser[];
-  assignedSupervisors?: AssignedUser[];
+  assignedManagers?: Array<{ userId: string; name: string; role: 'manager' }>;
+  assignedSupervisors?: Array<{ userId: string; name: string; role: 'supervisor' }>;
   status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  completionNotes?: string;
-  completionPercentage?: number;
 }
 
-export interface UpdateStatusRequest {
-  status: 'pending' | 'in-progress' | 'completed' | 'cancelled';
-  userId?: string;
-  userRole?: 'manager' | 'supervisor';
-}
-
-export interface AddHourlyUpdateRequest {
-  content: string;
-  submittedBy: string;
-  submittedByName: string;
-}
-
-export interface AddAttachmentRequest {
-  filename: string;
-  url: string;
-  size: number;
-  type: string;
-  uploadedBy: string;
-  uploadedByName: string;
-}
-
-export interface BulkCreateTasksRequest {
-  tasks: CreateAssignTaskRequest[];
-  createdBy: string;
-  createdByName: string;
-}
-
-export interface PaginatedResponse {
-  tasks: AssignTask[];
-  pagination: {
-    total: number;
-    page: number;
-    limit: number;
-    pages: number;
-  };
-}
-
-const API_URL = `http://${window.location.hostname}:5001/api/assign-tasks`;
+const API_URL = `http://${window.location.hostname}:5001/api`;
 
 class AssignTaskService {
-  
-  // Get all assign tasks with optional filters
-  async getAllAssignTasks(params?: {
-    status?: string;
-    priority?: string;
-    siteId?: string;
-    taskType?: string;
-    managerId?: string;
-    supervisorId?: string;
-    overdue?: boolean;
-    sortBy?: string;
-    sortOrder?: 'asc' | 'desc';
-    limit?: number;
-    page?: number;
-  }): Promise<PaginatedResponse> {
-    try {
-      const queryParams = new URLSearchParams();
-      
-      if (params) {
-        Object.entries(params).forEach(([key, value]) => {
-          if (value !== undefined && value !== null) {
-            queryParams.append(key, String(value));
-          }
-        });
-      }
-      
-      const url = `${API_URL}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-      console.log('📋 Fetching assign tasks from:', url);
-      
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to fetch assign tasks: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log(`✅ Fetched ${data.tasks?.length || 0} assign tasks`);
-      return data;
-      
-    } catch (error) {
-      console.error('❌ Error fetching assign tasks:', error);
-      throw error;
-    }
-  }
-
-  // Get assign task by ID
-  async getAssignTaskById(taskId: string): Promise<AssignTask | null> {
-    try {
-      const response = await fetch(`${API_URL}/${taskId}`);
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          return null;
-        }
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to fetch assign task: ${response.status}`);
-      }
-      
-      return await response.json();
-      
-    } catch (error) {
-      console.error(`❌ Error fetching assign task ${taskId}:`, error);
-      throw error;
-    }
-  }
-
-  // Create new assign task
   async createAssignTask(taskData: CreateAssignTaskRequest): Promise<AssignTask> {
     try {
-      console.log('📝 Sending create assign task request to:', API_URL);
-      console.log('📦 Task data:', JSON.stringify(taskData, null, 2));
+      console.log('📝 Creating assign task:', taskData);
       
-      const response = await fetch(API_URL, {
+      const response = await fetch(`${API_URL}/assigntasks`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(taskData),
       });
-      
-      const responseText = await response.text();
-      console.log('📨 Response status:', response.status);
-      console.log('📨 Response body:', responseText);
-      
+
       if (!response.ok) {
-        let errorData;
+        let errorMessage = 'Failed to create task';
         try {
-          errorData = JSON.parse(responseText);
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
         } catch {
-          errorData = { message: responseText || `Failed to create assign task: ${response.status}` };
+          errorMessage = response.statusText || errorMessage;
         }
-        console.error('❌ Server error response:', errorData);
-        throw new Error(errorData.message || `Failed to create assign task: ${response.status}`);
+        
+        if (response.status === 404) {
+          throw new Error('Route not found - please check if server is running and route is registered');
+        }
+        
+        throw new Error(errorMessage);
       }
-      
-      const result = JSON.parse(responseText);
-      console.log('✅ Assign task created successfully:', result);
+
+      const result = await response.json();
+      console.log('✅ Task created:', result);
       return result.task || result;
-      
     } catch (error) {
-      console.error('❌ Error creating assign task:', error);
+      console.error('❌ Error creating task:', error);
       throw error;
     }
   }
 
-  // Update assign task
+  async getAllAssignTasks(filters?: {
+    status?: string;
+    priority?: string;
+    siteId?: string;
+    managerId?: string;
+    supervisorId?: string;
+    userId?: string;
+    userRole?: string;
+  }): Promise<AssignTask[]> {
+    try {
+      console.log('📋 Fetching all assign tasks...');
+      
+      // Build query string from filters
+      const queryParams = new URLSearchParams();
+      if (filters) {
+        if (filters.status) queryParams.append('status', filters.status);
+        if (filters.priority) queryParams.append('priority', filters.priority);
+        if (filters.siteId) queryParams.append('siteId', filters.siteId);
+        if (filters.managerId) queryParams.append('managerId', filters.managerId);
+        if (filters.supervisorId) queryParams.append('supervisorId', filters.supervisorId);
+        if (filters.userId) queryParams.append('userId', filters.userId);
+        if (filters.userRole) queryParams.append('userRole', filters.userRole);
+      }
+      
+      const url = `${API_URL}/assigntasks${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        console.error(`❌ Failed to fetch tasks: ${response.status}`);
+        return [];
+      }
+
+      const data = await response.json();
+      
+      // Handle both array response and paginated response
+      let tasks = Array.isArray(data) ? data : (data.tasks || []);
+      
+      // Ensure tasks have the required arrays and properties
+      tasks = tasks.map((task: any) => ({
+        ...task,
+        assignedSupervisors: task.assignedSupervisors || [],
+        assignedManagers: task.assignedManagers || [],
+        hourlyUpdates: task.hourlyUpdates || [],
+        attachments: task.attachments || []
+      }));
+      
+      console.log(`✅ Fetched ${tasks.length} tasks`);
+      
+      return tasks;
+    } catch (error) {
+      console.error('❌ Error fetching tasks:', error);
+      return [];
+    }
+  }
+
+  async getAssignTaskById(taskId: string): Promise<AssignTask | null> {
+    try {
+      console.log(`📋 Fetching task ${taskId}...`);
+      
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}`);
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return null;
+        }
+        throw new Error('Failed to fetch task');
+      }
+
+      const task = await response.json();
+      
+      // Ensure arrays exist
+      return {
+        ...task,
+        assignedSupervisors: task.assignedSupervisors || [],
+        assignedManagers: task.assignedManagers || [],
+        hourlyUpdates: task.hourlyUpdates || [],
+        attachments: task.attachments || []
+      };
+    } catch (error) {
+      console.error('❌ Error fetching task:', error);
+      throw error;
+    }
+  }
+
   async updateAssignTask(taskId: string, updateData: UpdateAssignTaskRequest): Promise<AssignTask> {
     try {
-      console.log(`🔄 Updating assign task ${taskId}:`, JSON.stringify(updateData, null, 2));
+      console.log(`📝 Updating task ${taskId}:`, updateData);
       
-      const response = await fetch(`${API_URL}/${taskId}`, {
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(updateData),
       });
-      
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to update assign task: ${response.status}`);
+        let errorMessage = 'Failed to update task';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
-      
+
       const result = await response.json();
-      console.log('✅ Assign task updated successfully:', result);
+      console.log('✅ Task updated:', result);
       return result.task || result;
-      
     } catch (error) {
-      console.error(`❌ Error updating assign task ${taskId}:`, error);
+      console.error('❌ Error updating task:', error);
       throw error;
     }
   }
 
-  // Update task status
-  async updateTaskStatus(taskId: string, statusData: UpdateStatusRequest): Promise<AssignTask> {
+  async deleteAssignTask(taskId: string): Promise<void> {
     try {
-      const response = await fetch(`${API_URL}/${taskId}/status`, {
+      console.log(`🗑️ Deleting task ${taskId}...`);
+      
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete task';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      console.log('✅ Task deleted successfully');
+    } catch (error) {
+      console.error('❌ Error deleting task:', error);
+      throw error;
+    }
+  }
+
+  async updateTaskStatus(taskId: string, status: string): Promise<AssignTask> {
+    try {
+      console.log(`📝 Updating task ${taskId} status to ${status}`);
+      
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}/status`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(statusData),
+        body: JSON.stringify({ status }),
       });
-      
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to update task status: ${response.status}`);
+        let errorMessage = 'Failed to update status';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
-      
+
       const result = await response.json();
-      console.log('✅ Task status updated successfully:', result);
+      console.log('✅ Task status updated:', result);
       return result.task || result;
-      
     } catch (error) {
-      console.error(`❌ Error updating task ${taskId} status:`, error);
+      console.error('❌ Error updating task status:', error);
       throw error;
     }
   }
 
-  // Delete assign task
-  async deleteAssignTask(taskId: string): Promise<void> {
-    try {
-      const response = await fetch(`${API_URL}/${taskId}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to delete assign task: ${response.status}`);
-      }
-      
-      console.log(`✅ Assign task ${taskId} deleted successfully`);
-      
-    } catch (error) {
-      console.error(`❌ Error deleting assign task ${taskId}:`, error);
-      throw error;
-    }
-  }
-
-  // Add hourly update
-  async addHourlyUpdate(taskId: string, updateData: AddHourlyUpdateRequest): Promise<HourlyUpdate> {
-    try {
-      const response = await fetch(`${API_URL}/${taskId}/hourly-updates`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(updateData),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to add hourly update: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      console.log('✅ Hourly update added successfully:', result);
-      return result.update || result;
-      
-    } catch (error) {
-      console.error(`❌ Error adding hourly update to task ${taskId}:`, error);
-      throw error;
-    }
-  }
-
-  // Add attachment
-  async addAttachment(taskId: string, attachmentData: AddAttachmentRequest): Promise<Attachment> {
-    try {
-      const response = await fetch(`${API_URL}/${taskId}/attachments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(attachmentData),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to add attachment: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      console.log('✅ Attachment added successfully:', result);
-      return result.attachment || result;
-      
-    } catch (error) {
-      console.error(`❌ Error adding attachment to task ${taskId}:`, error);
-      throw error;
-    }
-  }
-
-  // Delete attachment
-  async deleteAttachment(taskId: string, attachmentId: string): Promise<void> {
-    try {
-      const response = await fetch(`${API_URL}/${taskId}/attachments/${attachmentId}`, {
-        method: 'DELETE',
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to delete attachment: ${response.status}`);
-      }
-      
-      console.log(`✅ Attachment ${attachmentId} deleted successfully`);
-      
-    } catch (error) {
-      console.error(`❌ Error deleting attachment ${attachmentId}:`, error);
-      throw error;
-    }
-  }
-
-  // Get task statistics
-  async getTaskStatistics() {
-    try {
-      const response = await fetch(`${API_URL}/stats`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch task statistics: ${response.status}`);
-      }
-      
-      return await response.json();
-      
-    } catch (error) {
-      console.error('❌ Error fetching task statistics:', error);
-      throw error;
-    }
-  }
-
-  // Search tasks
-  async searchTasks(query: string, filters?: {
-    status?: string;
-    priority?: string;
-    siteId?: string;
-    taskType?: string;
-  }): Promise<AssignTask[]> {
-    try {
-      const queryParams = new URLSearchParams({ query });
-      
-      if (filters) {
-        Object.entries(filters).forEach(([key, value]) => {
-          if (value) queryParams.append(key, value);
-        });
-      }
-      
-      const response = await fetch(`${API_URL}/search?${queryParams.toString()}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to search tasks: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
-      
-    } catch (error) {
-      console.error('❌ Error searching tasks:', error);
-      throw error;
-    }
-  }
-
-  // Get tasks by site
-  async getTasksBySite(siteId: string): Promise<AssignTask[]> {
-    try {
-      const response = await fetch(`${API_URL}/site/${siteId}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tasks by site: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
-      
-    } catch (error) {
-      console.error(`❌ Error fetching tasks for site ${siteId}:`, error);
-      throw error;
-    }
-  }
-
-  // Get tasks by manager
-  async getTasksByManager(managerId: string): Promise<AssignTask[]> {
-    try {
-      const response = await fetch(`${API_URL}/manager/${managerId}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tasks by manager: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
-      
-    } catch (error) {
-      console.error(`❌ Error fetching tasks for manager ${managerId}:`, error);
-      throw error;
-    }
-  }
-
-  // Get tasks by supervisor
   async getTasksBySupervisor(supervisorId: string): Promise<AssignTask[]> {
     try {
-      const response = await fetch(`${API_URL}/supervisor/${supervisorId}`);
+      console.log(`📋 Fetching tasks for supervisor ${supervisorId}...`);
       
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tasks by supervisor: ${response.status}`);
-      }
+      const allTasks = await this.getAllAssignTasks({ supervisorId });
       
-      const data = await response.json();
-      return Array.isArray(data) ? data : [];
-      
+      // Additional filtering to ensure we only get tasks where this supervisor is assigned
+      const supervisorTasks = allTasks.filter(task => {
+        if (!task.assignedSupervisors || !Array.isArray(task.assignedSupervisors)) {
+          return false;
+        }
+        
+        return task.assignedSupervisors.some(supervisor => {
+          const supervisorUserId = supervisor.userId || (supervisor as any)._id || (supervisor as any).id;
+          return String(supervisorUserId) === String(supervisorId);
+        });
+      });
+
+      console.log(`✅ Found ${supervisorTasks.length} tasks assigned to supervisor ${supervisorId}`);
+      return supervisorTasks;
     } catch (error) {
       console.error(`❌ Error fetching tasks for supervisor ${supervisorId}:`, error);
-      throw error;
+      return [];
     }
   }
 
-  // Create bulk tasks
-  async createBulkTasks(bulkData: BulkCreateTasksRequest): Promise<AssignTask[]> {
+  async getTasksByManager(managerId: string): Promise<AssignTask[]> {
     try {
-      console.log('📝 Creating bulk assign tasks:', JSON.stringify(bulkData, null, 2));
+      console.log(`📋 Fetching tasks created by manager ${managerId}...`);
       
-      const response = await fetch(`${API_URL}/bulk`, {
+      const allTasks = await this.getAllAssignTasks();
+      
+      const managerTasks = allTasks.filter(task => {
+        // Check if task was created by this manager
+        const createdBy = task.createdBy || (task as any).createdById;
+        return String(createdBy) === String(managerId);
+      });
+
+      console.log(`✅ Found ${managerTasks.length} tasks created by manager ${managerId}`);
+      return managerTasks;
+    } catch (error) {
+      console.error(`❌ Error fetching tasks for manager ${managerId}:`, error);
+      return [];
+    }
+  }
+
+// services/assignTaskService.ts
+
+async getTasksWithManager(managerId: string): Promise<AssignTask[]> {
+  try {
+    console.log(`📋 Fetching tasks with manager ${managerId} assigned...`);
+    
+    // Use the filter approach with the API
+    const allTasks = await this.getAllAssignTasks({ managerId });
+    
+    // Additional client-side filtering for safety
+    const tasksWithManager = allTasks.filter(task => {
+      if (!task.assignedManagers || !Array.isArray(task.assignedManagers)) {
+        return false;
+      }
+      
+      return task.assignedManagers.some(manager => {
+        const managerUserId = manager.userId || (manager as any)._id || (manager as any).id;
+        return String(managerUserId) === String(managerId);
+      });
+    });
+
+    console.log(`✅ Found ${tasksWithManager.length} tasks with manager ${managerId} assigned`);
+    return tasksWithManager;
+  } catch (error) {
+    console.error(`❌ Error fetching tasks with manager ${managerId}:`, error);
+    
+    // Fallback: try without filter
+    try {
+      console.log('⚠️ Trying fallback: fetching all tasks and filtering client-side');
+      const allTasks = await this.getAllAssignTasks();
+      
+      const tasksWithManager = allTasks.filter(task => {
+        if (!task.assignedManagers || !Array.isArray(task.assignedManagers)) {
+          return false;
+        }
+        
+        return task.assignedManagers.some(manager => {
+          const managerUserId = manager.userId || (manager as any)._id || (manager as any).id;
+          return String(managerUserId) === String(managerId);
+        });
+      });
+      
+      console.log(`✅ Fallback: Found ${tasksWithManager.length} tasks with manager ${managerId} assigned`);
+      return tasksWithManager;
+    } catch (fallbackError) {
+      return [];
+    }
+  }
+}
+
+  async getTasksBySite(siteId: string): Promise<AssignTask[]> {
+    try {
+      console.log(`📋 Fetching tasks for site ${siteId}...`);
+      
+      const allTasks = await this.getAllAssignTasks({ siteId });
+
+      console.log(`✅ Found ${allTasks.length} tasks for site ${siteId}`);
+      return allTasks;
+    } catch (error) {
+      console.error(`❌ Error fetching tasks for site ${siteId}:`, error);
+      return [];
+    }
+  }
+
+  async getTasksByStatus(status: string): Promise<AssignTask[]> {
+    try {
+      console.log(`📋 Fetching tasks with status ${status}...`);
+      
+      const allTasks = await this.getAllAssignTasks({ status });
+
+      console.log(`✅ Found ${allTasks.length} tasks with status ${status}`);
+      return allTasks;
+    } catch (error) {
+      console.error(`❌ Error fetching tasks with status ${status}:`, error);
+      return [];
+    }
+  }
+
+  async getOverdueTasks(): Promise<AssignTask[]> {
+    try {
+      console.log('📋 Fetching overdue tasks...');
+      
+      const allTasks = await this.getAllAssignTasks();
+      const now = new Date();
+      
+      const overdueTasks = allTasks.filter(task => 
+        task.status !== 'completed' && 
+        task.status !== 'cancelled' && 
+        new Date(task.dueDateTime) < now
+      );
+
+      console.log(`✅ Found ${overdueTasks.length} overdue tasks`);
+      return overdueTasks;
+    } catch (error) {
+      console.error('❌ Error fetching overdue tasks:', error);
+      return [];
+    }
+  }
+
+  async addHourlyUpdate(
+    taskId: string, 
+    content: string, 
+    submittedBy: string, 
+    submittedByName: string
+  ): Promise<any> {
+    try {
+      console.log(`📝 Adding hourly update to task ${taskId}`);
+      
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}/hourly-updates`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(bulkData),
+        body: JSON.stringify({
+          content,
+          submittedBy,
+          submittedByName
+        }),
       });
-      
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to create bulk tasks: ${response.status}`);
+        let errorMessage = 'Failed to add hourly update';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
-      
+
       const result = await response.json();
-      console.log('✅ Bulk tasks created successfully:', result);
-      return result.tasks || result;
-      
+      console.log('✅ Hourly update added:', result);
+      return result.update || result;
     } catch (error) {
-      console.error('❌ Error creating bulk tasks:', error);
+      console.error('❌ Error adding hourly update:', error);
       throw error;
     }
   }
 
-  // Utility: Format date
-  formatDate(dateString: string): string {
-    if (!dateString) return 'No date set';
+  async uploadAttachment(taskId: string, file: File, uploadedBy: string, uploadedByName: string): Promise<any> {
     try {
-      const date = new Date(dateString);
-      return date.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
+      console.log(`📎 Uploading attachment to task ${taskId}`);
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('uploadedBy', uploadedBy);
+      formData.append('uploadedByName', uploadedByName);
+
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}/attachments`, {
+        method: 'POST',
+        body: formData,
       });
-    } catch {
-      return 'Invalid date';
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to upload attachment';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const result = await response.json();
+      console.log('✅ Attachment uploaded:', result);
+      return result.attachment || result;
+    } catch (error) {
+      console.error('❌ Error uploading attachment:', error);
+      throw error;
     }
   }
 
-  // Utility: Get priority color
-  getPriorityColor(priority: string): 'destructive' | 'default' | 'secondary' | 'outline' {
-    const colors: Record<string, 'destructive' | 'default' | 'secondary' | 'outline'> = { 
-      high: 'destructive', 
-      medium: 'default', 
-      low: 'secondary' 
-    };
-    return colors[priority] || 'default';
+  async deleteAttachment(taskId: string, attachmentId: string): Promise<void> {
+    try {
+      console.log(`🗑️ Deleting attachment ${attachmentId} from task ${taskId}`);
+      
+      const response = await fetch(`${API_URL}/assigntasks/${taskId}/attachments/${attachmentId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete attachment';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      console.log('✅ Attachment deleted successfully');
+    } catch (error) {
+      console.error('❌ Error deleting attachment:', error);
+      throw error;
+    }
   }
 
-  // Utility: Get status color
-  getStatusColor(status: string): 'default' | 'destructive' | 'secondary' | 'outline' {
-    const colors: Record<string, 'default' | 'destructive' | 'secondary' | 'outline'> = { 
-      completed: 'default', 
-      'in-progress': 'default', 
-      pending: 'secondary',
-      cancelled: 'destructive'
-    };
-    return colors[status] || 'default';
+  async getTaskStatistics(): Promise<{
+    total: number;
+    byStatus: Record<string, number>;
+    byPriority: Record<string, number>;
+    overdue: number;
+  }> {
+    try {
+      console.log('📊 Calculating task statistics...');
+      
+      const allTasks = await this.getAllAssignTasks();
+      const now = new Date();
+      
+      const byStatus: Record<string, number> = {};
+      const byPriority: Record<string, number> = {};
+      let overdue = 0;
+      
+      allTasks.forEach(task => {
+        // Count by status
+        byStatus[task.status] = (byStatus[task.status] || 0) + 1;
+        
+        // Count by priority
+        byPriority[task.priority] = (byPriority[task.priority] || 0) + 1;
+        
+        // Count overdue
+        if (task.status !== 'completed' && task.status !== 'cancelled' && new Date(task.dueDateTime) < now) {
+          overdue++;
+        }
+      });
+      
+      const stats = {
+        total: allTasks.length,
+        byStatus,
+        byPriority,
+        overdue
+      };
+      
+      console.log('✅ Statistics calculated:', stats);
+      return stats;
+    } catch (error) {
+      console.error('❌ Error calculating statistics:', error);
+      throw error;
+    }
   }
 
-  // Utility: Check if task is overdue
-  isOverdue(task: AssignTask): boolean {
-    if (task.status === 'completed' || task.status === 'cancelled') return false;
-    const dueDate = new Date(task.dueDateTime);
-    const now = new Date();
-    return dueDate < now;
-  }
+  async searchTasks(query: string): Promise<AssignTask[]> {
+    try {
+      console.log(`🔍 Searching tasks for: "${query}"`);
+      
+      const allTasks = await this.getAllAssignTasks();
+      const searchLower = query.toLowerCase();
+      
+      const results = allTasks.filter(task => 
+        task.taskTitle.toLowerCase().includes(searchLower) ||
+        task.description.toLowerCase().includes(searchLower) ||
+        task.siteName.toLowerCase().includes(searchLower) ||
+        task.clientName.toLowerCase().includes(searchLower) ||
+        task.taskType.toLowerCase().includes(searchLower) ||
+        (task.createdByName && task.createdByName.toLowerCase().includes(searchLower))
+      );
 
-  // Utility: Get days until due
-  getDaysUntilDue(task: AssignTask): number {
-    const dueDate = new Date(task.dueDateTime);
-    const now = new Date();
-    const diffTime = dueDate.getTime() - now.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  }
-
-  // Utility: Get all assigned staff names
-  getAssignedStaffNames(task: AssignTask): string[] {
-    const managerNames = task.assignedManagers?.map(m => m.name) || [];
-    const supervisorNames = task.assignedSupervisors?.map(s => s.name) || [];
-    return [...managerNames, ...supervisorNames];
-  }
-
-  // Utility: Get completion status text
-  getCompletionStatus(task: AssignTask): string {
-    if (task.status === 'completed') return 'Completed';
-    if (task.status === 'cancelled') return 'Cancelled';
-    
-    const completedCount = [
-      ...(task.assignedManagers || []),
-      ...(task.assignedSupervisors || [])
-    ].filter(u => u.status === 'completed').length;
-    
-    const totalCount = [
-      ...(task.assignedManagers || []),
-      ...(task.assignedSupervisors || [])
-    ].length;
-    
-    if (totalCount === 0) return 'No staff assigned';
-    return `${completedCount}/${totalCount} completed`;
+      console.log(`✅ Found ${results.length} tasks matching "${query}"`);
+      return results;
+    } catch (error) {
+      console.error('❌ Error searching tasks:', error);
+      return [];
+    }
   }
 }
 

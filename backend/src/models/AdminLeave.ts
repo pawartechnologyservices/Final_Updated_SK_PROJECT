@@ -1,113 +1,168 @@
-// models/AdminLeave.ts
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type LeaveType = 'annual' | 'sick' | 'personal' | 'maternity' | 'paternity' | 'unpaid';
-export type LeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type AdminLeaveType = 'annual' | 'sick' | 'casual' | 'emergency' | 'maternity' | 'paternity' | 'bereavement' | 'unpaid' | 'other';
+export type AdminLeaveStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface IAdminLeave extends Document {
-  employeeId: string;
-  employeeName: string;
-  leaveType: LeaveType;
+  // Admin information (stored separately, no validation)
+  adminId: string;
+  adminName: string;
+  adminDepartment: string;
+  adminPosition: string;
+  adminEmail: string;
+  adminContact: string;
+  
+  // Leave information
+  leaveType: AdminLeaveType;
   fromDate: Date;
   toDate: Date;
   totalDays: number;
   reason: string;
-  appliedDate: Date;
+  
+  // Application details
   appliedBy: string;
-  department: string;
-  contactNumber?: string;
-  status: LeaveStatus;
+  appliedDate: Date;
+  
+  // Status tracking
+  status: AdminLeaveStatus;
   remarks?: string;
+  
+  // Approval/Rejection info (by admin)
+  approvedBy?: string;
+  approvedAt?: Date;
+  rejectedBy?: string;
+  rejectedAt?: Date;
+  adminRemarks?: string;
+  
+  // Approval/Rejection info (by superadmin)
+  approvedBySuperadmin?: string;
+  approvedAtSuperadmin?: Date;
+  rejectedBySuperadmin?: string;
+  rejectedAtSuperadmin?: Date;
+  superadminRemarks?: string;
+  
+  // Cancellation
   cancellationReason?: string;
   
-  // New fields for superadmin approval
-  approvedBy?: string;        // Superadmin who approved
-  approvedAt?: Date;          // When it was approved
-  rejectedBy?: string;        // Superadmin who rejected
-  rejectedAt?: Date;          // When it was rejected
-  superadminRemarks?: string; // Remarks from superadmin
-  
-  // Request type identifier
-  requestType: 'admin-leave'; // To identify this is an admin leave
-  
+  // System tracking
+  requestType: 'admin-leave';
   createdAt: Date;
   updatedAt: Date;
 }
 
 const AdminLeaveSchema: Schema = new Schema({
-  employeeId: {
+  adminId: {
     type: String,
-    required: true,
-    index: true
+    required: [true, 'Admin ID is required'],
+    index: true,
+    trim: true
   },
-  employeeName: {
+  adminName: {
     type: String,
-    required: true
+    required: [true, 'Admin name is required'],
+    trim: true
   },
+  adminDepartment: {
+    type: String,
+    required: [true, 'Admin department is required'],
+    index: true,
+    trim: true
+  },
+  adminPosition: {
+    type: String,
+    default: 'Admin',
+    trim: true
+  },
+  adminEmail: {
+    type: String,
+    trim: true,
+    lowercase: true
+  },
+  adminContact: {
+    type: String,
+    required: [true, 'Admin contact number is required'],
+    trim: true
+  },
+  
   leaveType: {
     type: String,
-    enum: ['annual', 'sick', 'personal', 'maternity', 'paternity', 'unpaid'],
-    required: true
+    enum: ['annual', 'sick', 'casual', 'emergency', 'maternity', 'paternity', 'bereavement', 'unpaid', 'other'],
+    required: [true, 'Leave type is required']
   },
   fromDate: {
     type: Date,
-    required: true
+    required: [true, 'From date is required']
   },
   toDate: {
     type: Date,
-    required: true
+    required: [true, 'To date is required']
   },
   totalDays: {
     type: Number,
-    required: true,
-    min: 1
+    required: [true, 'Total days is required'],
+    min: [0.5, 'Total days must be at least 0.5'],
+    max: [90, 'Total days cannot exceed 90']
   },
   reason: {
     type: String,
-    required: true,
+    required: [true, 'Reason is required'],
+    trim: true
+  },
+  
+  appliedBy: {
+    type: String,
+    required: [true, 'Applied by is required'],
     trim: true
   },
   appliedDate: {
     type: Date,
     default: Date.now
   },
-  appliedBy: {
-    type: String,
-    required: true
-  },
-  department: {
-    type: String,
-    default: 'Administration'
-  },
-  contactNumber: {
-    type: String,
-    trim: true
-  },
+  
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected', 'cancelled'],
-    default: 'pending'
+    default: 'pending',
+    index: true
   },
   remarks: {
     type: String,
     trim: true
   },
-  cancellationReason: {
+  
+  // Approval/Rejection by admin
+  approvedBy: {
     type: String,
     trim: true
-  },
-  
-  // New fields for superadmin approval
-  approvedBy: {
-    type: String
   },
   approvedAt: {
     type: Date
   },
   rejectedBy: {
-    type: String
+    type: String,
+    trim: true
   },
   rejectedAt: {
+    type: Date
+  },
+  adminRemarks: {
+    type: String,
+    trim: true
+  },
+  
+  // Approval/Rejection by superadmin
+  approvedBySuperadmin: {
+    type: String,
+    trim: true
+  },
+  approvedAtSuperadmin: {
+    type: Date
+  },
+  rejectedBySuperadmin: {
+    type: String,
+    trim: true
+  },
+  rejectedAtSuperadmin: {
     type: Date
   },
   superadminRemarks: {
@@ -115,34 +170,34 @@ const AdminLeaveSchema: Schema = new Schema({
     trim: true
   },
   
-  // Request type identifier
+  cancellationReason: {
+    type: String,
+    trim: true
+  },
+  
   requestType: {
     type: String,
     default: 'admin-leave',
     enum: ['admin-leave']
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: {
+    transform: function(doc, ret) {
+      ret.id = ret._id.toString();
+      delete ret._id;
+      delete ret.__v;
+      return ret;
+    }
+  }
 });
 
 // Indexes for better query performance
-AdminLeaveSchema.index({ employeeId: 1, status: 1 });
-AdminLeaveSchema.index({ fromDate: 1, toDate: 1 });
+AdminLeaveSchema.index({ adminId: 1, status: 1 });
+AdminLeaveSchema.index({ adminDepartment: 1, status: 1 });
+AdminLeaveSchema.index({ appliedDate: -1 });
+AdminLeaveSchema.index({ requestType: 1 });
 AdminLeaveSchema.index({ status: 1, appliedDate: -1 });
-AdminLeaveSchema.index({ requestType: 1 }); // Index for filtering
-
-// Pre-save middleware to update approval/rejection dates
-AdminLeaveSchema.pre('save', function(next) {
-  if (this.isModified('status')) {
-    const now = new Date();
-    if (this.status === 'approved') {
-      this.approvedAt = now;
-    } else if (this.status === 'rejected') {
-      this.rejectedAt = now;
-    }
-  }
-  next();
-});
 
 const AdminLeave = mongoose.model<IAdminLeave>('AdminLeave', AdminLeaveSchema);
 

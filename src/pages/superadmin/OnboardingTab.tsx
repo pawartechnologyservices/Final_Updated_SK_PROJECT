@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import * as XLSX from 'xlsx';
 import { Badge } from "@/components/ui/badge";
 
+
 // Define the API Base URL
 const API_URL = `http://${window.location.hostname}:5001/api`;
 
@@ -406,6 +407,7 @@ const OnboardingTab = ({
   const [selectedSiteDetails, setSelectedSiteDetails] = useState<Site | null>(null);
   const [currentSiteStaffCount, setCurrentSiteStaffCount] = useState<number>(0);
   const [availableStaffPositions, setAvailableStaffPositions] = useState<number>(0);
+  
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1458,90 +1460,144 @@ const OnboardingTab = ({
   };
 
   // Camera functions
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          facingMode: 'user',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        } 
+  // Camera functions - FIXED
+const startCamera = async () => {
+  try {
+    // Stop any existing stream first
+    if (streamRef.current) {
+      stopCamera();
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { 
+        facingMode: 'user',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      } 
+    });
+    
+    streamRef.current = stream;
+    
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      
+      // Wait for video to be ready
+      await new Promise((resolve) => {
+        if (videoRef.current) {
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play()
+              .then(resolve)
+              .catch(error => {
+                console.error("Error playing video:", error);
+                resolve(null);
+              });
+          };
+        }
       });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(error => {
-          console.error("Error playing video:", error);
-        });
-      }
-      setShowCamera(true);
-    } catch (error) {
-      console.error("Error accessing camera:", error);
+    }
+    
+    setShowCamera(true);
+    setCapturedImage(null);
+    toast.success("Camera started successfully");
+    
+  } catch (error: any) {
+    console.error("Error accessing camera:", error);
+    
+    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+      toast.error("Camera permission denied. Please allow camera access and try again.");
+    } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+      toast.error("No camera found on this device.");
+    } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+      toast.error("Camera is already in use by another application.");
+    } else {
       toast.error("Cannot access camera. Please check permissions and try again.");
     }
-  };
+  }
+};
 
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
+const capturePhoto = () => {
+  if (videoRef.current && canvasRef.current) {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    
+    if (context) {
+      // Set canvas dimensions to match video
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
       
-      if (context) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        const imageData = canvas.toDataURL('image/jpeg', 0.8);
-        setCapturedImage(imageData);
-      }
-    }
-  };
-
-  const retakePhoto = () => {
-    setCapturedImage(null);
-  };
-
-  const useCapturedPhoto = () => {
-    if (capturedImage) {
-      // Create a blob from the data URL
-      fetch(capturedImage)
-        .then(res => res.blob())
-        .then(blob => {
-          const file = new File([blob], 'employee-photo.jpg', { type: 'image/jpeg' });
-          setNewEmployee({...newEmployee, photo: file});
-          
-          // Create preview URL
-          const previewUrl = URL.createObjectURL(file);
-          setPhotoPreview(previewUrl);
-          
-          toast.success("Photo captured successfully!");
-        })
-        .catch(error => {
-          console.error("Error converting photo:", error);
-          toast.error("Error processing photo. Please try again.");
-        });
-    }
-    stopCamera();
-    setShowCamera(false);
-    setCapturedImage(null);
-  };
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop();
-      });
-      streamRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
+      // Draw the video frame to canvas
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // Convert to data URL
+      const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      setCapturedImage(imageData);
+      
+      // Stop the camera stream
       stopCamera();
-    };
-  }, []);
+      toast.success("Photo captured successfully!");
+    }
+  }
+};
+
+const retakePhoto = () => {
+  setCapturedImage(null);
+  // Restart camera
+  startCamera();
+};
+
+const useCapturedPhoto = () => {
+  if (capturedImage) {
+    // Convert data URL to blob
+    fetch(capturedImage)
+      .then(res => res.blob())
+      .then(blob => {
+        // Create a file from the blob
+        const file = new File([blob], `employee-photo-${Date.now()}.jpg`, { 
+          type: 'image/jpeg' 
+        });
+        
+        setNewEmployee({...newEmployee, photo: file});
+        
+        // Create preview URL
+        if (photoPreview) {
+          URL.revokeObjectURL(photoPreview);
+        }
+        const previewUrl = URL.createObjectURL(file);
+        setPhotoPreview(previewUrl);
+        
+        toast.success("Photo added successfully!");
+        
+        // Close camera modal
+        setShowCamera(false);
+        setCapturedImage(null);
+      })
+      .catch(error => {
+        console.error("Error converting photo:", error);
+        toast.error("Error processing photo. Please try again.");
+      });
+  }
+};
+
+const stopCamera = () => {
+  if (streamRef.current) {
+    streamRef.current.getTracks().forEach(track => {
+      track.stop();
+    });
+    streamRef.current = null;
+  }
+  
+  if (videoRef.current) {
+    videoRef.current.srcObject = null;
+  }
+};
+
+// Clean up camera on component unmount
+useEffect(() => {
+  return () => {
+    stopCamera();
+  };
+}, []);
 
   // Handle file upload
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2433,58 +2489,100 @@ const OnboardingTab = ({
 
   return (
     <div className="space-y-6">
-      {showCamera && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg max-w-md w-full">
-            <div className="flex justify-between items-center p-4 border-b">
-              <h3 className="text-lg font-semibold">Capture Photo</h3>
-              <Button variant="ghost" size="sm" onClick={() => { setShowCamera(false); stopCamera(); }}>
-                <X className="h-4 w-4" />
+     {showCamera && (
+  <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-lg max-w-md w-full">
+      <div className="flex justify-between items-center p-4 border-b">
+        <h3 className="text-lg font-semibold">Capture Employee Photo</h3>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          onClick={() => { 
+            setShowCamera(false); 
+            stopCamera(); 
+            setCapturedImage(null);
+          }}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      
+      <div className="p-4">
+        {!capturedImage ? (
+          <>
+            <div className="relative bg-gray-100 rounded-lg overflow-hidden">
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                muted
+                className="w-full h-64 object-cover"
+              />
+              <div className="absolute bottom-2 left-0 right-0 text-center">
+                <div className="inline-block bg-black bg-opacity-50 text-white text-xs px-2 py-1 rounded">
+                  Camera is active
+                </div>
+              </div>
+            </div>
+            <canvas ref={canvasRef} className="hidden" />
+            <div className="flex gap-2 mt-4">
+              <Button 
+                onClick={capturePhoto} 
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
+                <Camera className="h-4 w-4 mr-2" />
+                Capture Photo
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={() => { 
+                  setShowCamera(false); 
+                  stopCamera(); 
+                }}
+              >
+                Cancel
               </Button>
             </div>
-            
-            <div className="p-4">
-              {!capturedImage ? (
-                <>
-                  <video 
-                    ref={videoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted
-                    className="w-full h-64 bg-gray-100 rounded-lg"
-                  />
-                  <canvas ref={canvasRef} className="hidden" />
-                  <div className="flex gap-2 mt-4">
-                    <Button onClick={capturePhoto} className="flex-1">
-                      <Camera className="h-4 w-4 mr-2" />
-                      Capture Photo
-                    </Button>
-                    <Button variant="outline" onClick={() => { setShowCamera(false); stopCamera(); }}>
-                      Cancel
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <img 
-                    src={capturedImage} 
-                    alt="Captured" 
-                    className="w-full h-64 object-cover rounded-lg"
-                  />
-                  <div className="flex gap-2 mt-4">
-                    <Button onClick={useCapturedPhoto} className="flex-1">
-                      Use This Photo
-                    </Button>
-                    <Button variant="outline" onClick={retakePhoto}>
-                      Retake Photo
-                    </Button>
-                  </div>
-                </>
-              )}
+          </>
+        ) : (
+          <>
+            <div className="bg-gray-100 rounded-lg overflow-hidden">
+              <img 
+                src={capturedImage} 
+                alt="Captured" 
+                className="w-full h-64 object-contain"
+              />
             </div>
-          </div>
-        </div>
-      )}
+            <div className="flex gap-2 mt-4">
+              <Button 
+                onClick={useCapturedPhoto} 
+                className="flex-1 bg-green-600 hover:bg-green-700"
+              >
+                <Check className="h-4 w-4 mr-2" />
+                Use This Photo
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={retakePhoto}
+              >
+                <Camera className="h-4 w-4 mr-2" />
+                Retake
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+      
+      {/* Camera Instructions */}
+      <div className="p-4 bg-gray-50 border-t rounded-b-lg">
+        <p className="text-xs text-gray-600">
+          <span className="font-semibold">Tips:</span> Ensure good lighting and face the camera directly. 
+          The photo should be clear and well-lit.
+        </p>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* Excel Import Preview Modal */}
       {showExcelPreview && (
